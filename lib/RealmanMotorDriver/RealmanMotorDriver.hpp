@@ -101,10 +101,15 @@ namespace realman_motor_driver
         void setCurrentControlMode(void);
         void setTargetPosition(float target_position);
         void setTargetVelocity(float target_velocity);
+        void setTargetCurrent(float target_current);
         void setZeroPosition(void);
         void loadCurrentState(void);
-        void updateCurrentPosition(void);
+        void loadCurrentCurrent(void);
+        void loadCurrentVelocity(void);
+        void loadCurrentPosition(void);
         float getCurrentPosition(void);
+        float getCurrentVelocity(void);
+        float getCurrentTorque(void);
 
     private:
         CONNECTION_STATE connection_state = OFFLINE;
@@ -113,7 +118,9 @@ namespace realman_motor_driver
         CONTROL_MODE control_mode = POSITION_CONTROL;
         uint8_t error_state = 0;
         uint8_t module_id;
-        float current_position;
+        float current_position = 0.0;
+        float current_velocity = 0.0;
+        float current_torque = 0.0;
 
         std::shared_ptr<CAN_COMMON> can_handler;
         // データ送信

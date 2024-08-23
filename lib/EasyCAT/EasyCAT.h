@@ -79,7 +79,7 @@
 
 
 #include <stdint.h>
-#include "DS402_PDOs_EasyCatProject.h"
+#include "CANFD_PDOs_EasyCatProject.h"
  
  
 #define TOT_BYTE_NUM_OUT  CUST_BYTE_NUM_OUT       // any number between 0 and 128  

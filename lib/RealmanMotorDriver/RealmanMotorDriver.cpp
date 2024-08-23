@@ -126,11 +126,29 @@ int32_t bytesToInt32(uint8_t *bytes)
 
 void RealmanMotorDriver::processCommonMessage(CAN_FRAME_FD &message)
 {
+    //for (int i = 0; i < message.length; i++)
+    //{
+    //    Serial.printf("0x%02X ", message.data.uint8[i]);
+    //}
     uint8_t command_type = message.data.uint8[0];
     uint8_t command_index = message.data.uint8[1];
+    //Serial.printf("Command Type: 0x%02X, Command Index: 0x%02X\n", command_type, command_index);
     if (command_index == 0x14)
     { // current position
         this->current_position = (float) (bytesToInt32(&message.data.uint8[2])) / 10000.0;
+        //Serial.printf("Current Position in common message: %f\n", this->current_position);
+    }
+    else if (command_index == 0x10)
+    {
+        int32_t current_current = bytesToInt32(&message.data.uint8[2]);
+        this->current_torque = (float) current_current;
+        //Serial.printf("current %d\n", current_current);
+    }
+    else if (command_index == 0x12)
+    {
+        int32_t current_velocity = bytesToInt32(&message.data.uint8[2]);
+        this->current_velocity = (float) current_velocity / 50.0;
+        //Serial.printf("velocity %d\n", current_velocity);
     }
 }
 
@@ -138,6 +156,8 @@ void RealmanMotorDriver::processCommonMessage(CAN_FRAME_FD &message)
 void RealmanMotorDriver::processStateMessage(CAN_FRAME_FD &message)
 {
     if (message.length != 16) {
+        Serial.println("Message length is not 16");
+        Serial.println(message.length);
         return;
     }
     //uint16_t error_code = (message.data.uint8[1] << 8) | message.data.uint8[0];
@@ -181,7 +201,25 @@ void RealmanMotorDriver::processServoMessage(CAN_FRAME_FD &message)
 }
 
 
-void RealmanMotorDriver::updateCurrentPosition(void)
+void RealmanMotorDriver::loadCurrentCurrent(void)
+{
+    BytesUnion_FD data;
+    data.uint8[0] = 0x01;
+    data.uint8[1] = 0x10;
+    data.uint8[2] = 0x02;
+    this->transmitMessage(MESSAGE_TYPE_CMD_COMMON, data, 3);
+}
+
+void RealmanMotorDriver::loadCurrentVelocity(void)
+{
+    BytesUnion_FD data;
+    data.uint8[0] = 0x01;
+    data.uint8[1] = 0x12;
+    data.uint8[2] = 0x02;
+    this->transmitMessage(MESSAGE_TYPE_CMD_COMMON, data, 3);
+}
+
+void RealmanMotorDriver::loadCurrentPosition(void)
 {
     BytesUnion_FD data;
     data.uint8[0] = 0x01;
@@ -189,9 +227,20 @@ void RealmanMotorDriver::updateCurrentPosition(void)
     data.uint8[2] = 0x02;
     this->transmitMessage(MESSAGE_TYPE_CMD_COMMON, data, 3);
 }
+
 float RealmanMotorDriver::getCurrentPosition(void)
 {
     return this->current_position;
+}
+
+float RealmanMotorDriver::getCurrentVelocity(void)
+{
+    return this->current_velocity;
+}
+
+float RealmanMotorDriver::getCurrentTorque(void)
+{
+    return this->current_torque;
 }
 
 void RealmanMotorDriver::setTargetPosition(float target_position)
@@ -238,6 +287,25 @@ void RealmanMotorDriver::setTargetVelocity(float target_velocity)
     this->transmitMessage(MESSAGE_TYPE_CMD_COMMON, data, 6);
 }
 
+void RealmanMotorDriver::setTargetCurrent(float target_current)
+{
+    
+    BytesUnion_FD data;
+    int32_t target_current_int = (int32_t) (target_current);
+    // For safety, limit the current to 1000
+    if (target_current_int > 2000)
+    {
+        target_current_int = 2000;
+    }
+    data.uint8[0] = 0x02;
+    data.uint8[1] = 0x32;
+    data.uint8[2] = (target_current_int & 0x000000FF);
+    data.uint8[3] = (target_current_int & 0x0000FF00) >> 8;
+    data.uint8[4] = (target_current_int & 0x00FF0000) >> 16;
+    data.uint8[5] = (target_current_int & 0xFF000000) >> 24;
+    this->transmitMessage(MESSAGE_TYPE_CMD_COMMON, data, 6);
+}
+
 void RealmanMotorDriver::setZeroPosition(void)
 {
     BytesUnion_FD data;
@@ -263,8 +331,12 @@ void RealmanMotorDriver::processCANFDMessage(CAN_FRAME_FD &message)
 {
     uint8_t module_id = (message.id & 0x00FF); // Mask for binary 0000000011111111
     uint16_t message_type = (message.id & 0x0F00); // Mask for binary 0000111100000000
+    //Serial.printf("Module ID: 0x%02X Message Type: 0x%04X\n", module_id, message_type);
+    //Serial.printf("Module ID: 0x%02X\n", module_id);
+    //Serial.printf("driver module ID: 0x%02X\n", this->module_id);
     if (module_id != this->module_id)
     {
+        Serial.printf("Module ID does not match\n");
         return;
     }
     //Serial.printf("Processing message\n");
