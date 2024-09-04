@@ -9,5 +9,6 @@
     ],
     "files.associations": {
         "spi_master.h": "c"
-    }
+    },
+    "idf.port": "/dev/ttyUSB1"
 }

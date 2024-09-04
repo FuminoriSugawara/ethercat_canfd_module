@@ -135,19 +135,17 @@ void RealmanMotorDriver::processCommonMessage(CAN_FRAME_FD &message)
     //Serial.printf("Command Type: 0x%02X, Command Index: 0x%02X\n", command_type, command_index);
     if (command_index == 0x14)
     { // current position
-        this->current_position = (float) (bytesToInt32(&message.data.uint8[2])) / 10000.0;
+        this->current_position = bytesToInt32(&message.data.uint8[2]);
         //Serial.printf("Current Position in common message: %f\n", this->current_position);
     }
     else if (command_index == 0x10)
     {
-        int32_t current_current = bytesToInt32(&message.data.uint8[2]);
-        this->current_torque = (float) current_current;
+        this->current_torque = bytesToInt32(&message.data.uint8[2]);
         //Serial.printf("current %d\n", current_current);
     }
     else if (command_index == 0x12)
     {
-        int32_t current_velocity = bytesToInt32(&message.data.uint8[2]);
-        this->current_velocity = (float) current_velocity / 50.0;
+        this->current_velocity = bytesToInt32(&message.data.uint8[2]);
         //Serial.printf("velocity %d\n", current_velocity);
     }
 }
@@ -176,11 +174,11 @@ void RealmanMotorDriver::processStateMessage(CAN_FRAME_FD &message)
     Serial.printf("Brake State: %d\n", brake_state);
     // float current_position = (message.data.uint8[11] << 24) | (message.data.uint8[10] << 16) | (message.data.uint8[9] << 8) | message.data.uint8[8];
     float current_position = (float) (bytesToInt32(&message.data.uint8[8])) / 10000;
-    this->current_position = current_position;
+    //this->current_position = current_position;
     Serial.printf("Current Position: %f\n", current_position);
     // float current_current = (message.data.uint8[15] << 24) | (message.data.uint8[14] << 16) | (message.data.uint8[13] << 8) | message.data.uint8[12];
     float current_current = (float) (bytesToUint32(&message.data.uint8[12])) / 1000;
-    Serial.printf("Current Current: %f\n", current_current);
+    //Serial.printf("Current Current: %f\n", current_current);
 }
 
 void RealmanMotorDriver::processServoMessage(CAN_FRAME_FD &message)
@@ -190,7 +188,7 @@ void RealmanMotorDriver::processServoMessage(CAN_FRAME_FD &message)
     }
     float current_current = (float)(bytesToInt32(&message.data.uint8[0]));
     float current_velocity = (float) (bytesToInt32(&message.data.uint8[4])) / 50;
-    float current_position = (float) (bytesToInt32(&message.data.uint8[8])) / 10000;
+    float current_position = (float) (bytesToInt32(&message.data.uint8[8])) / 10000.0;
     uint16_t enable_state = bytesToUint16(&message.data.uint8[12]);
     uint16_t error_state = bytesToUint16(&message.data.uint8[14]);
     Serial.printf("Current Current: %f\n", current_current);
@@ -243,7 +241,7 @@ float RealmanMotorDriver::getCurrentTorque(void)
     return this->current_torque;
 }
 
-void RealmanMotorDriver::setTargetPosition(float target_position)
+void RealmanMotorDriver::setTargetPosition(int32_t target_position)
 {
     //if (this->control_mode != CONTROL_MODE::POSITION_CONTROL)
     //{
@@ -251,7 +249,7 @@ void RealmanMotorDriver::setTargetPosition(float target_position)
     //    return;
     //}
     BytesUnion_FD data;
-    uint32_t target_position_int = (uint32_t) (target_position * 10000);
+    uint32_t target_position_int = (uint32_t) (target_position);
     data.uint8[0] = (target_position_int & 0x000000FF);
     data.uint8[1] = (target_position_int & 0x0000FF00) >> 8;
     data.uint8[2] = (target_position_int & 0x00FF0000) >> 16;
@@ -264,7 +262,7 @@ void RealmanMotorDriver::setTargetPosition(float target_position)
     this->transmitMessage(MESSAGE_TYPE_CMD_POS, data, 4);
 }
 
-void RealmanMotorDriver::setTargetVelocity(float target_velocity)
+void RealmanMotorDriver::setTargetVelocity(int32_t target_velocity)
 {
     //if (this->control_mode != CONTROL_MODE::VELOCITY_CONTROL)
     //{
@@ -272,7 +270,7 @@ void RealmanMotorDriver::setTargetVelocity(float target_velocity)
     //    return;
     //}
     BytesUnion_FD data;
-    int32_t target_velocity_int = (int32_t) (target_velocity * 500);
+    int32_t target_velocity_int = (int32_t) (target_velocity);
     data.uint8[0] = 0x02;
     data.uint8[1] = 0x34;
     data.uint8[2] = (target_velocity_int & 0x000000FF);
@@ -287,7 +285,7 @@ void RealmanMotorDriver::setTargetVelocity(float target_velocity)
     this->transmitMessage(MESSAGE_TYPE_CMD_COMMON, data, 6);
 }
 
-void RealmanMotorDriver::setTargetCurrent(float target_current)
+void RealmanMotorDriver::setTargetCurrent(int32_t target_current)
 {
     
     BytesUnion_FD data;
@@ -336,7 +334,7 @@ void RealmanMotorDriver::processCANFDMessage(CAN_FRAME_FD &message)
     //Serial.printf("driver module ID: 0x%02X\n", this->module_id);
     if (module_id != this->module_id)
     {
-        Serial.printf("Module ID does not match\n");
+        //Serial.printf("Module ID does not match, expected: 0x%02X, received: 0x%02X\n", this->module_id, module_id);
         return;
     }
     //Serial.printf("Processing message\n");

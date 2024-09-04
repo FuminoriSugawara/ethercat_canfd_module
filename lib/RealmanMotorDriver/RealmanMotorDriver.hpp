@@ -99,9 +99,9 @@ namespace realman_motor_driver
         void setPositionControlMode(void);
         void setVelocityControlMode(void);
         void setCurrentControlMode(void);
-        void setTargetPosition(float target_position);
-        void setTargetVelocity(float target_velocity);
-        void setTargetCurrent(float target_current);
+        void setTargetPosition(int32_t target_position);
+        void setTargetVelocity(int32_t target_velocity);
+        void setTargetCurrent(int32_t target_current);
         void setZeroPosition(void);
         void loadCurrentState(void);
         void loadCurrentCurrent(void);

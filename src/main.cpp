@@ -24,10 +24,11 @@
 
 #define UART_NUM UART_NUM_0
 #define BUF_SIZE (1024)
-#define MOTOR_DRIVER_COUNT 3
+#define MOTOR_DRIVER_COUNT 7
 //#define MOTOR_DRIVER_COUNT 4
 //#define MOTOR_DRIVER_COUNT 1
 #define CONTROL_MODE RMTR_SERVO_MODE_CUR
+//#define CONTROL_MODE RMTR_SERVO_MODE_POS
 
 unsigned long previousMs = 0;
 const int OUTPUTS_COUNT = 8;
@@ -39,7 +40,10 @@ CAN_FRAME_FD message;
 realman_motor_driver::RealmanMotorDriver motor_drivers[MOTOR_DRIVER_COUNT] = {
     realman_motor_driver::RealmanMotorDriver(0x01, std::shared_ptr<CAN_COMMON>(&CAN1)),
     realman_motor_driver::RealmanMotorDriver(0x02, std::shared_ptr<CAN_COMMON>(&CAN1)),
-    //realman_motor_driver::RealmanMotorDriver(0x03, std::shared_ptr<CAN_COMMON>(&CAN1)),
+    realman_motor_driver::RealmanMotorDriver(0x03, std::shared_ptr<CAN_COMMON>(&CAN1)),
+    realman_motor_driver::RealmanMotorDriver(0x04, std::shared_ptr<CAN_COMMON>(&CAN1)),
+    realman_motor_driver::RealmanMotorDriver(0x05, std::shared_ptr<CAN_COMMON>(&CAN1)),
+    realman_motor_driver::RealmanMotorDriver(0x06, std::shared_ptr<CAN_COMMON>(&CAN1)),
     realman_motor_driver::RealmanMotorDriver(0x07, std::shared_ptr<CAN_COMMON>(&CAN1)),
 };
 
@@ -53,9 +57,9 @@ int32_t actual_velocities[8] = {0, 0, 0, 0, 0, 0, 0, 0};
 int32_t actual_torques[8] = {0, 0, 0, 0, 0, 0, 0, 0};
 uint16_t status_words[8] = {0, 0, 0, 0, 0, 0, 0, 0};
 
-float target_positions[8] = {0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0};
-float target_velocities[8] = {0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0};
-float target_torques[8] = {0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0};
+int32_t target_positions[8] = {0, 0, 0, 0, 0, 0, 0, 0};
+int32_t target_velocities[8] = {0, 0, 0, 0, 0, 0, 0, 0};
+int32_t target_torques[8] = {0, 0, 0, 0, 0, 0, 0, 0};
 uint16_t control_words[8] = {0, 0, 0, 0, 0, 0, 0, 0};
 
 
@@ -83,12 +87,11 @@ bool motorDriverSetup()
             motor_drivers[i].setConnectionOnline();
             vTaskDelay(100 / portTICK_PERIOD_MS);
         }
-        vTaskDelay(5000 / portTICK_PERIOD_MS);
-        for (int i = 0; i < MOTOR_DRIVER_COUNT; i++)
-        {
-            motor_drivers[i].loadCurrentState();
-            vTaskDelay(100 / portTICK_PERIOD_MS);
-        }
+        // for (int i = 0; i < MOTOR_DRIVER_COUNT; i++)
+        // {
+        //     motor_drivers[i].loadCurrentState();
+        //     vTaskDelay(100 / portTICK_PERIOD_MS);
+        // }
         //for (int i = 0; i < MOTOR_DRIVER_COUNT; i++)
         //{
         //    motor_drivers[i].setPositionControlMode();
@@ -102,6 +105,12 @@ bool motorDriverSetup()
         //}
         for (int i = 0; i < MOTOR_DRIVER_COUNT; i++)
         {
+            motor_drivers[i].setDriverDisabled();
+            vTaskDelay(10 / portTICK_PERIOD_MS);
+            motor_drivers[i].setZeroPosition();
+            vTaskDelay(10 / portTICK_PERIOD_MS);
+            motor_drivers[i].clearJointError();
+            vTaskDelay(10 / portTICK_PERIOD_MS);
 
             if (CONTROL_MODE == RMTR_SERVO_MODE_POS)
             {
@@ -118,14 +127,9 @@ bool motorDriverSetup()
                 // Switch to current control mode
                 motor_drivers[i].setCurrentControlMode();
             }
-            vTaskDelay(100 / portTICK_PERIOD_MS);
+            vTaskDelay(10 / portTICK_PERIOD_MS);
             motor_drivers[i].setDriverEnabled();
-            vTaskDelay(100 / portTICK_PERIOD_MS);
-        }
-        for (int i = 0; i < MOTOR_DRIVER_COUNT; i++)
-        {
-            motor_drivers[i].loadCurrentState();
-            vTaskDelay(100 / portTICK_PERIOD_MS);
+            vTaskDelay(10 / portTICK_PERIOD_MS);
         }
     return true;
 }
@@ -141,21 +145,23 @@ void canfd_send_task(void *pvParameters) {
             motor_drivers[i].loadCurrentCurrent();
             //vTaskDelay(10 / portTICK_PERIOD_MS);
             //motor_drivers[i].loadCurrentVelocity();
-            vTaskDelay(10 / portTICK_PERIOD_MS);
+            vTaskDelay(1 / portTICK_PERIOD_MS);
             motor_drivers[i].loadCurrentPosition();
-            vTaskDelay(10 / portTICK_PERIOD_MS);
+            vTaskDelay(1 / portTICK_PERIOD_MS);
             if (CONTROL_MODE == RMTR_SERVO_MODE_POS)
             {
+                Serial.printf("Target position %d: %d\n", i, target_positions[i]);
                 motor_drivers[i].setTargetPosition(target_positions[i]);
             }
             else if (CONTROL_MODE == RMTR_SERVO_MODE_VEL)
             {
+                Serial.printf("Target velocity %d: %d\n", i, target_velocities[i]);
                 motor_drivers[i].setTargetVelocity(target_velocities[i]);
             }
             else if (CONTROL_MODE == RMTR_SERVO_MODE_CUR)
             {
                 motor_drivers[i].setTargetCurrent(target_torques[i]);
-                Serial.printf("Target torque %d: %f\n", i, target_torques[i]);
+                Serial.printf("Target torque %d: %d\n", i, target_torques[i]);
             }
             vTaskDelay(10 / portTICK_PERIOD_MS);
         }
@@ -168,12 +174,13 @@ void canfd_receive_task(void *pvParameters) {
     while (1) {
         if (CAN1.readFD(message))
         {
+            CAN_FRAME_FD _message = message;
             for (int i = 0; i < MOTOR_DRIVER_COUNT; i++)
             {
-                motor_drivers[i].processCANFDMessage(message);
+                motor_drivers[i].processCANFDMessage(_message);
                 // update actual position
                 actual_positions[i] = (int32_t)(motor_drivers[i].getCurrentPosition());
-                Serial.printf("Actual position %d: %d\n", i, actual_positions[i]);
+                // Serial.printf("Actual position %d: %d\n", i, actual_positions[i]);
                 // update actual velocity
                 actual_velocities[i] = (int32_t)(motor_drivers[i].getCurrentVelocity());
                 // update actual torque
@@ -199,32 +206,32 @@ void EasyCAT_Application ()
     _EasyCAT_BufferOut = EasyCAT_BufferOut;
 
     // update target position
-    target_positions[0] = (float)(_EasyCAT_BufferOut.Cust.Position_1) / 10000.0;
-    target_positions[1] = (float)(_EasyCAT_BufferOut.Cust.Position_2) / 10000.0;
-    target_positions[2] = (float)(_EasyCAT_BufferOut.Cust.Position_3) / 10000.0;
-    target_positions[3] = (float)(_EasyCAT_BufferOut.Cust.Position_4) / 10000.0;
-    target_positions[4] = (float)(_EasyCAT_BufferOut.Cust.Position_5) / 10000.0;
-    target_positions[5] = (float)(_EasyCAT_BufferOut.Cust.Position_6) / 10000.0;
-    target_positions[6] = (float)(_EasyCAT_BufferOut.Cust.Position_7) / 10000.0;
-    target_positions[7] = (float)(_EasyCAT_BufferOut.Cust.Position_8) / 10000.0;
+    target_positions[0] = _EasyCAT_BufferOut.Cust.Position_1;
+    target_positions[1] = _EasyCAT_BufferOut.Cust.Position_2;
+    target_positions[2] = _EasyCAT_BufferOut.Cust.Position_3;
+    target_positions[3] = _EasyCAT_BufferOut.Cust.Position_4;
+    target_positions[4] = _EasyCAT_BufferOut.Cust.Position_5;
+    target_positions[5] = _EasyCAT_BufferOut.Cust.Position_6;
+    target_positions[6] = _EasyCAT_BufferOut.Cust.Position_7;
+    target_positions[7] = _EasyCAT_BufferOut.Cust.Position_8;
     // update target velocity
-    target_velocities[0] = (float)(_EasyCAT_BufferOut.Cust.Velocity_1) / 10000.0;
-    target_velocities[1] = (float)(_EasyCAT_BufferOut.Cust.Velocity_2) / 10000.0;
-    target_velocities[2] = (float)(_EasyCAT_BufferOut.Cust.Velocity_3) / 10000.0;
-    target_velocities[3] = (float)(_EasyCAT_BufferOut.Cust.Velocity_4) / 10000.0;
-    target_velocities[4] = (float)(_EasyCAT_BufferOut.Cust.Velocity_5) / 10000.0;
-    target_velocities[5] = (float)(_EasyCAT_BufferOut.Cust.Velocity_6) / 10000.0;
-    target_velocities[6] = (float)(_EasyCAT_BufferOut.Cust.Velocity_7) / 10000.0;
-    target_velocities[7] = (float)(_EasyCAT_BufferOut.Cust.Velocity_8) / 10000.0;
+    target_velocities[0] = _EasyCAT_BufferOut.Cust.Velocity_1;
+    target_velocities[1] = _EasyCAT_BufferOut.Cust.Velocity_2;
+    target_velocities[2] = _EasyCAT_BufferOut.Cust.Velocity_3;
+    target_velocities[3] = _EasyCAT_BufferOut.Cust.Velocity_4;
+    target_velocities[4] = _EasyCAT_BufferOut.Cust.Velocity_5;
+    target_velocities[5] = _EasyCAT_BufferOut.Cust.Velocity_6;
+    target_velocities[6] = _EasyCAT_BufferOut.Cust.Velocity_7;
+    target_velocities[7] = _EasyCAT_BufferOut.Cust.Velocity_8;
     // update target torque
-    target_torques[0] = (float)(_EasyCAT_BufferOut.Cust.Torque_1);
-    target_torques[1] = (float)(_EasyCAT_BufferOut.Cust.Torque_2);
-    target_torques[2] = (float)(_EasyCAT_BufferOut.Cust.Torque_3);
-    target_torques[3] = (float)(_EasyCAT_BufferOut.Cust.Torque_4);
-    target_torques[4] = (float)(_EasyCAT_BufferOut.Cust.Torque_5);
-    target_torques[5] = (float)(_EasyCAT_BufferOut.Cust.Torque_6);
-    target_torques[6] = (float)(_EasyCAT_BufferOut.Cust.Torque_7);
-    target_torques[7] = (float)(_EasyCAT_BufferOut.Cust.Torque_8);
+    target_torques[0] = _EasyCAT_BufferOut.Cust.Torque_1;
+    target_torques[1] = _EasyCAT_BufferOut.Cust.Torque_2;
+    target_torques[2] = _EasyCAT_BufferOut.Cust.Torque_3;
+    target_torques[3] = _EasyCAT_BufferOut.Cust.Torque_4;
+    target_torques[4] = _EasyCAT_BufferOut.Cust.Torque_5;
+    target_torques[5] = _EasyCAT_BufferOut.Cust.Torque_6;
+    target_torques[6] = _EasyCAT_BufferOut.Cust.Torque_7;
+    target_torques[7] = _EasyCAT_BufferOut.Cust.Torque_8;
     // update control word
     control_words[0] = _EasyCAT_BufferOut.Cust.ControlWord_1;
     control_words[1] = _EasyCAT_BufferOut.Cust.ControlWord_2;
