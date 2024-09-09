@@ -32,19 +32,20 @@
 
 unsigned long previousMs = 0;
 const int OUTPUTS_COUNT = 8;
+boolean DEBUG_MODE = false;
 // EasyCAT buffer
 PROCBUFFER_OUT _EasyCAT_BufferOut;  // output process data buffer
 
 
 CAN_FRAME_FD message;
 realman_motor_driver::RealmanMotorDriver motor_drivers[MOTOR_DRIVER_COUNT] = {
-    realman_motor_driver::RealmanMotorDriver(0x01, std::shared_ptr<CAN_COMMON>(&CAN1)),
-    realman_motor_driver::RealmanMotorDriver(0x02, std::shared_ptr<CAN_COMMON>(&CAN1)),
-    realman_motor_driver::RealmanMotorDriver(0x03, std::shared_ptr<CAN_COMMON>(&CAN1)),
-    realman_motor_driver::RealmanMotorDriver(0x04, std::shared_ptr<CAN_COMMON>(&CAN1)),
-    realman_motor_driver::RealmanMotorDriver(0x05, std::shared_ptr<CAN_COMMON>(&CAN1)),
-    realman_motor_driver::RealmanMotorDriver(0x06, std::shared_ptr<CAN_COMMON>(&CAN1)),
-    realman_motor_driver::RealmanMotorDriver(0x07, std::shared_ptr<CAN_COMMON>(&CAN1)),
+    realman_motor_driver::RealmanMotorDriver(0x01, std::shared_ptr<CAN_COMMON>(&CAN1), DEBUG_MODE),
+    realman_motor_driver::RealmanMotorDriver(0x02, std::shared_ptr<CAN_COMMON>(&CAN1), DEBUG_MODE),
+    realman_motor_driver::RealmanMotorDriver(0x03, std::shared_ptr<CAN_COMMON>(&CAN1), DEBUG_MODE),
+    realman_motor_driver::RealmanMotorDriver(0x04, std::shared_ptr<CAN_COMMON>(&CAN1), DEBUG_MODE),
+    realman_motor_driver::RealmanMotorDriver(0x05, std::shared_ptr<CAN_COMMON>(&CAN1), DEBUG_MODE),
+    realman_motor_driver::RealmanMotorDriver(0x06, std::shared_ptr<CAN_COMMON>(&CAN1), DEBUG_MODE),
+    realman_motor_driver::RealmanMotorDriver(0x07, std::shared_ptr<CAN_COMMON>(&CAN1), DEBUG_MODE),
 };
 
 //realman_motor_driver::RealmanMotorDriver motorDriver{0x07, std::shared_ptr<CAN_COMMON>(&CAN1)};
@@ -87,6 +88,7 @@ bool motorDriverSetup()
             motor_drivers[i].setConnectionOnline();
             vTaskDelay(100 / portTICK_PERIOD_MS);
         }
+        vTaskDelay(3000 / portTICK_PERIOD_MS);
         // for (int i = 0; i < MOTOR_DRIVER_COUNT; i++)
         // {
         //     motor_drivers[i].loadCurrentState();
@@ -105,12 +107,12 @@ bool motorDriverSetup()
         //}
         for (int i = 0; i < MOTOR_DRIVER_COUNT; i++)
         {
-            motor_drivers[i].setDriverDisabled();
-            vTaskDelay(10 / portTICK_PERIOD_MS);
-            motor_drivers[i].setZeroPosition();
-            vTaskDelay(10 / portTICK_PERIOD_MS);
-            motor_drivers[i].clearJointError();
-            vTaskDelay(10 / portTICK_PERIOD_MS);
+            // motor_drivers[i].setDriverDisabled();
+            // vTaskDelay(100 / portTICK_PERIOD_MS);
+            // motor_drivers[i].setZeroPosition();
+            // vTaskDelay(100 / portTICK_PERIOD_MS);
+            // motor_drivers[i].clearJointError();
+            // vTaskDelay(100 / portTICK_PERIOD_MS);
 
             if (CONTROL_MODE == RMTR_SERVO_MODE_POS)
             {
@@ -127,14 +129,14 @@ bool motorDriverSetup()
                 // Switch to current control mode
                 motor_drivers[i].setCurrentControlMode();
             }
-            vTaskDelay(10 / portTICK_PERIOD_MS);
-            motor_drivers[i].setDriverEnabled();
-            vTaskDelay(10 / portTICK_PERIOD_MS);
+            vTaskDelay(100 / portTICK_PERIOD_MS);
+            //motor_drivers[i].setDriverEnabled();
+            //vTaskDelay(100 / portTICK_PERIOD_MS);
         }
     return true;
 }
 
-void canfd_send_task(void *pvParameters) {
+void canfd_task(void *pvParameters) {
     motorDriverSetup();
     //while (1) {
     //    vTaskDelay(10 / portTICK_PERIOD_MS);
@@ -142,12 +144,17 @@ void canfd_send_task(void *pvParameters) {
     while (1) {
         for (int i = 0; i < MOTOR_DRIVER_COUNT; i++)
         {
-            motor_drivers[i].loadCurrentCurrent();
-            //vTaskDelay(10 / portTICK_PERIOD_MS);
-            //motor_drivers[i].loadCurrentVelocity();
-            vTaskDelay(1 / portTICK_PERIOD_MS);
             motor_drivers[i].loadCurrentPosition();
-            vTaskDelay(1 / portTICK_PERIOD_MS);
+            vTaskDelay(20 / portTICK_PERIOD_MS);
+            actual_positions[i] = (int32_t)(motor_drivers[i].getCurrentPosition());
+            Serial.printf("Actual position %d: %d\n", i, actual_positions[i]);
+            motor_drivers[i].loadCurrentCurrent();
+            vTaskDelay(20 / portTICK_PERIOD_MS);
+            actual_torques[i] = (int32_t)(motor_drivers[i].getCurrentTorque());
+            motor_drivers[i].loadCurrentVelocity();
+            vTaskDelay(20 / portTICK_PERIOD_MS);
+            actual_velocities[i] = (int32_t)(motor_drivers[i].getCurrentVelocity());
+            
             if (CONTROL_MODE == RMTR_SERVO_MODE_POS)
             {
                 Serial.printf("Target position %d: %d\n", i, target_positions[i]);
@@ -165,29 +172,6 @@ void canfd_send_task(void *pvParameters) {
             }
             vTaskDelay(10 / portTICK_PERIOD_MS);
         }
-        vTaskDelay(10 / portTICK_PERIOD_MS);
-    }
-}
-
-void canfd_receive_task(void *pvParameters) {
-
-    while (1) {
-        if (CAN1.readFD(message))
-        {
-            CAN_FRAME_FD _message = message;
-            for (int i = 0; i < MOTOR_DRIVER_COUNT; i++)
-            {
-                motor_drivers[i].processCANFDMessage(_message);
-                // update actual position
-                actual_positions[i] = (int32_t)(motor_drivers[i].getCurrentPosition());
-                // Serial.printf("Actual position %d: %d\n", i, actual_positions[i]);
-                // update actual velocity
-                actual_velocities[i] = (int32_t)(motor_drivers[i].getCurrentVelocity());
-                // update actual torque
-                actual_torques[i] = (int32_t)(motor_drivers[i].getCurrentTorque());
-            }
-        }
-        vTaskDelay(1 / portTICK_PERIOD_MS);
     }
 }
 
@@ -312,8 +296,7 @@ extern "C" void app_main(void)
 	CAN1.watchFor(); 
 
 
-    xTaskCreate(canfd_send_task, "canfd_send_task", 4096, NULL, 5, NULL);
-    xTaskCreate(canfd_receive_task, "canfd_receive_task", 4096, NULL, 5, NULL);
+    xTaskCreate(canfd_task, "canfd_send_task", 4096, NULL, 5, NULL);
     xTaskCreate(easyCAT_task, "easyCAT_task", 4096, NULL, 5, NULL);
 
 }

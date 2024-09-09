@@ -2,9 +2,10 @@
 #include "RealmanMotorDriver.hpp"
 using namespace realman_motor_driver;
 
-RealmanMotorDriver::RealmanMotorDriver(uint8_t module_id, std::shared_ptr<CAN_COMMON> can_handler) {
+RealmanMotorDriver::RealmanMotorDriver(uint8_t module_id, std::shared_ptr<CAN_COMMON> can_handler, boolean debug_mode) {
     this->can_handler = can_handler;
     this->module_id = module_id;
+    this->IS_DEBUG = debug_mode;
 }
 
 
@@ -21,13 +22,17 @@ void RealmanMotorDriver::clearJointError(void)
     data.uint8[0] = 0x02;
     data.uint8[1] = 0x0F;
     data.uint8[2] = 0x01;
-    this->transmitMessage(MESSAGE_TYPE_CMD_COMMON, data, 3);
+    CAN_FRAME_FD response =
+        this->transmitMessage(MESSAGE_TYPE_CMD_COMMON, data, 3);
+    this->processCANFDMessage(response);
 }
 
 void RealmanMotorDriver::loadCurrentState(void)
 {
     BytesUnion_FD empty_data;
-    this->transmitMessage(MESSAGE_TYPE_CMD_JSTATE, empty_data, 0);
+    CAN_FRAME_FD response =
+        this->transmitMessage(MESSAGE_TYPE_CMD_JSTATE, empty_data, 0);
+    this->processCANFDMessage(response);
 }
 
 
@@ -38,7 +43,9 @@ void RealmanMotorDriver::setDriverEnabled(void)
     data.uint8[0] = 0x02;
     data.uint8[1] = 0x0A;
     data.uint8[2] = 0x01;
-    this->transmitMessage(MESSAGE_TYPE_CMD_COMMON, data, 3);
+    CAN_FRAME_FD response =
+        this->transmitMessage(MESSAGE_TYPE_CMD_COMMON, data, 3);
+    this->processCANFDMessage(response);
     this->driver_state = DRIVER_ENABLED;
 }
 
@@ -48,7 +55,9 @@ void RealmanMotorDriver::setDriverDisabled(void)
     data.uint8[0] = 0x02;
     data.uint8[1] = 0x0A;
     data.uint8[2] = 0x00;
-    this->transmitMessage(MESSAGE_TYPE_CMD_COMMON, data, 3);
+    CAN_FRAME_FD response =
+        this->transmitMessage(MESSAGE_TYPE_CMD_COMMON, data, 3);
+    this->processCANFDMessage(response);
     this->driver_state = DRIVER_DISABLED;
 }
 
@@ -58,7 +67,9 @@ void RealmanMotorDriver::setConnectionOnline(void)
     data.uint8[0] = 0x02;
     data.uint8[1] = 0x49;
     data.uint8[2] = 0x00;
-    this->transmitMessage(MESSAGE_TYPE_CMD_COMMON, data, 3);
+    CAN_FRAME_FD response =
+        this->transmitMessage(MESSAGE_TYPE_CMD_COMMON, data, 3);
+    this->processCANFDMessage(response);
     this->connection_state = ONLINE;
 }
 
@@ -84,7 +95,9 @@ void RealmanMotorDriver::setPositionControlMode(void)
     data.uint8[0] = 0x02;
     data.uint8[1] = 0x30;
     data.uint8[2] = 0x03;
-    this->transmitMessage(MESSAGE_TYPE_CMD_COMMON, data, 3);
+    CAN_FRAME_FD response =
+        this->transmitMessage(MESSAGE_TYPE_CMD_COMMON, data, 3);
+    this->processCANFDMessage(response);
     this->control_mode = POSITION_CONTROL;
 }
 
@@ -94,7 +107,10 @@ void RealmanMotorDriver::setVelocityControlMode(void)
     data.uint8[0] = 0x02;
     data.uint8[1] = 0x30;
     data.uint8[2] = 0x02;
-    this->transmitMessage(MESSAGE_TYPE_CMD_COMMON, data, 3);
+
+    CAN_FRAME_FD response =
+        this->transmitMessage(MESSAGE_TYPE_CMD_COMMON, data, 3);
+    this->processCANFDMessage(response);
     this->control_mode = VELOCITY_CONTROL;
 }
 
@@ -104,7 +120,9 @@ void RealmanMotorDriver::setCurrentControlMode(void)
     data.uint8[0] = 0x02;
     data.uint8[1] = 0x30;
     data.uint8[2] = 0x01;
-    this->transmitMessage(MESSAGE_TYPE_CMD_COMMON, data, 3);
+    CAN_FRAME_FD response =
+        this->transmitMessage(MESSAGE_TYPE_CMD_COMMON, data, 3);
+    this->processCANFDMessage(response);
     this->control_mode = CURRENT_CONTROL;
 }
 
@@ -178,7 +196,7 @@ void RealmanMotorDriver::processStateMessage(CAN_FRAME_FD &message)
     Serial.printf("Current Position: %f\n", current_position);
     // float current_current = (message.data.uint8[15] << 24) | (message.data.uint8[14] << 16) | (message.data.uint8[13] << 8) | message.data.uint8[12];
     float current_current = (float) (bytesToUint32(&message.data.uint8[12])) / 1000;
-    //Serial.printf("Current Current: %f\n", current_current);
+    Serial.printf("Current Current: %f\n", current_current);
 }
 
 void RealmanMotorDriver::processServoMessage(CAN_FRAME_FD &message)
@@ -205,7 +223,9 @@ void RealmanMotorDriver::loadCurrentCurrent(void)
     data.uint8[0] = 0x01;
     data.uint8[1] = 0x10;
     data.uint8[2] = 0x02;
-    this->transmitMessage(MESSAGE_TYPE_CMD_COMMON, data, 3);
+    CAN_FRAME_FD response =
+        this->transmitMessage(MESSAGE_TYPE_CMD_COMMON, data, 3);
+    this->processCANFDMessage(response);
 }
 
 void RealmanMotorDriver::loadCurrentVelocity(void)
@@ -214,7 +234,9 @@ void RealmanMotorDriver::loadCurrentVelocity(void)
     data.uint8[0] = 0x01;
     data.uint8[1] = 0x12;
     data.uint8[2] = 0x02;
-    this->transmitMessage(MESSAGE_TYPE_CMD_COMMON, data, 3);
+    CAN_FRAME_FD response =
+        this->transmitMessage(MESSAGE_TYPE_CMD_COMMON, data, 3);
+    this->processCANFDMessage(response);
 }
 
 void RealmanMotorDriver::loadCurrentPosition(void)
@@ -223,7 +245,9 @@ void RealmanMotorDriver::loadCurrentPosition(void)
     data.uint8[0] = 0x01;
     data.uint8[1] = 0x14;
     data.uint8[2] = 0x02;
-    this->transmitMessage(MESSAGE_TYPE_CMD_COMMON, data, 3);
+    CAN_FRAME_FD response =
+        this->transmitMessage(MESSAGE_TYPE_CMD_COMMON, data, 3);
+    this->processCANFDMessage(response);
 }
 
 float RealmanMotorDriver::getCurrentPosition(void)
@@ -259,7 +283,9 @@ void RealmanMotorDriver::setTargetPosition(int32_t target_position)
     // {
     //     Serial.printf("0x%02X ", data.uint8[i]);
     // }
-    this->transmitMessage(MESSAGE_TYPE_CMD_POS, data, 4);
+    CAN_FRAME_FD response =
+        this->transmitMessage(MESSAGE_TYPE_CMD_POS, data, 4);
+    this->processCANFDMessage(response);
 }
 
 void RealmanMotorDriver::setTargetVelocity(int32_t target_velocity)
@@ -282,7 +308,8 @@ void RealmanMotorDriver::setTargetVelocity(int32_t target_velocity)
     {
         Serial.printf("0x%02X ", data.uint8[i]);
     }
-    this->transmitMessage(MESSAGE_TYPE_CMD_COMMON, data, 6);
+    CAN_FRAME_FD response = this->transmitMessage(MESSAGE_TYPE_CMD_COMMON, data, 6);
+    this->processCANFDMessage(response);
 }
 
 void RealmanMotorDriver::setTargetCurrent(int32_t target_current)
@@ -301,7 +328,8 @@ void RealmanMotorDriver::setTargetCurrent(int32_t target_current)
     data.uint8[3] = (target_current_int & 0x0000FF00) >> 8;
     data.uint8[4] = (target_current_int & 0x00FF0000) >> 16;
     data.uint8[5] = (target_current_int & 0xFF000000) >> 24;
-    this->transmitMessage(MESSAGE_TYPE_CMD_COMMON, data, 6);
+    CAN_FRAME_FD response = this->transmitMessage(MESSAGE_TYPE_CMD_COMMON, data, 6);
+    this->processCANFDMessage(response);
 }
 
 void RealmanMotorDriver::setZeroPosition(void)
@@ -310,10 +338,12 @@ void RealmanMotorDriver::setZeroPosition(void)
     data.uint8[0] = 0x02;
     data.uint8[1] = 0x0E;
     data.uint8[2] = 0x01;
-    this->transmitMessage(MESSAGE_TYPE_CMD_COMMON, data, 3);
+    CAN_FRAME_FD response = this->transmitMessage(MESSAGE_TYPE_CMD_COMMON, data, 3);
+    this->processCANFDMessage(response);
 }
 
-void RealmanMotorDriver::transmitMessage(uint16_t message_type, BytesUnion_FD data, uint8_t length)
+
+CAN_FRAME_FD RealmanMotorDriver::transmitMessage(uint16_t message_type, BytesUnion_FD data, uint8_t length)
 {
     CAN_FRAME_FD txFrame;
     txFrame.rrs = 0;
@@ -322,6 +352,19 @@ void RealmanMotorDriver::transmitMessage(uint16_t message_type, BytesUnion_FD da
     txFrame.data = data;
     txFrame.length = length;
     this->can_handler->sendFrameFD(txFrame);
+
+    //Get response and return
+    CAN_FRAME_FD rxFrame;
+    this->can_handler->readFD(rxFrame);
+    if (this->IS_DEBUG) {
+        Serial.printf("ID: 0x%04X\n", rxFrame.id);
+        for (int i = 0; i < rxFrame.length; i++)
+        {
+            Serial.printf("0x%02X ", rxFrame.data.uint8[i]);
+        }
+        Serial.printf("\n");
+    }
+    return rxFrame;
 }
 
 

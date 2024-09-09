@@ -85,7 +85,7 @@ namespace realman_motor_driver
     class RealmanMotorDriver
     {
     public:
-        RealmanMotorDriver(uint8_t module_id, std::shared_ptr<CAN_COMMON> can_handler);
+        RealmanMotorDriver(uint8_t module_id, std::shared_ptr<CAN_COMMON> can_handler, boolean debug_mode = false);
         void processCANFDMessage(CAN_FRAME_FD &message);
         void processCommonMessage(CAN_FRAME_FD &message);
         void processStateMessage(CAN_FRAME_FD &message);
@@ -121,10 +121,11 @@ namespace realman_motor_driver
         float current_position = 0.0;
         float current_velocity = 0.0;
         float current_torque = 0.0;
+        boolean IS_DEBUG = false;
 
         std::shared_ptr<CAN_COMMON> can_handler;
         // データ送信
-        void transmitMessage(uint16_t message_type, BytesUnion_FD data, uint8_t length);
+        CAN_FRAME_FD transmitMessage(uint16_t message_type, BytesUnion_FD data, uint8_t length);
     };
 }
 
