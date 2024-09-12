@@ -17,6 +17,7 @@
 #define MESSAGE_TYPE_CMD_VEL (0x0300)    // 速度サーボコマンド
 #define MESSAGE_TYPE_CMD_CUR (0x0400)    // 電流サーボコマンド
 #define MESSAGE_TYPE_CMD_JSTATE (0x0600) // ジョイントステータス要求
+#define MESSAGE_TYPE_RES_DEBUG (0x0900) // デバッグ情報応答
 
 // ***************************************
 // * servo mode
@@ -85,7 +86,7 @@ namespace realman_motor_driver
     class RealmanMotorDriver
     {
     public:
-        RealmanMotorDriver(uint8_t module_id, std::shared_ptr<CAN_COMMON> can_handler, boolean debug_mode = false);
+        RealmanMotorDriver(uint8_t module_id, std::shared_ptr<CAN_COMMON> can_handler, boolean debug_mode = false, boolean DRY_RUN = false);
         void processCANFDMessage(CAN_FRAME_FD &message);
         void processCommonMessage(CAN_FRAME_FD &message);
         void processStateMessage(CAN_FRAME_FD &message);
@@ -107,25 +108,33 @@ namespace realman_motor_driver
         void loadCurrentCurrent(void);
         void loadCurrentVelocity(void);
         void loadCurrentPosition(void);
-        float getCurrentPosition(void);
-        float getCurrentVelocity(void);
-        float getCurrentTorque(void);
+        int32_t getCurrentPosition(void);
+        int32_t getCurrentVelocity(void);
+        int32_t getCurrentTorque(void);
+        uint16_t getErrorState(void);
+        bool getConnectionState(void);
+
 
     private:
         CONNECTION_STATE connection_state = OFFLINE;
         DRIVER_STATE driver_state = DRIVER_DISABLED;
         BRAKE_STATE brake_state = BRAKE_ON;
         CONTROL_MODE control_mode = POSITION_CONTROL;
-        uint8_t error_state = 0;
+        uint16_t error_state = 0;
         uint8_t module_id;
-        float current_position = 0.0;
-        float current_velocity = 0.0;
-        float current_torque = 0.0;
+        int32_t current_position = 0;
+        int32_t current_velocity = 0;
+        int32_t current_torque = 0;
         boolean IS_DEBUG = false;
+        boolean DRY_RUN = false;
+        boolean SERIAL_DEBUG = false;
 
         std::shared_ptr<CAN_COMMON> can_handler;
         // データ送信
-        CAN_FRAME_FD transmitMessage(uint16_t message_type, BytesUnion_FD data, uint8_t length);
+        void transmitMessage(uint16_t message_type, BytesUnion_FD data, uint8_t length);
+        void transmitDummyMessage(uint16_t message_type, BytesUnion_FD data, uint8_t length);
+
+        void transmitDebugMessage(CAN_FRAME_FD &message);
     };
 }
 
