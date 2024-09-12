@@ -480,7 +480,7 @@ void easyCAT_task(void *pvParameters) {
         unsigned char status = EasyCAT_MainTask();
         // printf("EasyCAT status: %d\n", status);
         EasyCAT_Application();
-        vTaskDelay(100 / portTICK_PERIOD_MS);
+        vTaskDelay(1 / portTICK_PERIOD_MS);
     }
 }
 
