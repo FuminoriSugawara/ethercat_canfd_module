@@ -10,5 +10,6 @@
     "files.associations": {
         "spi_master.h": "c"
     },
-    "idf.port": "/dev/ttyUSB1"
+    "idf.port": "/dev/ttyUSB1",
+    "idf.adapterTargetName": "esp32"
 }

@@ -33,14 +33,18 @@
 
 unsigned long previousMs = 0;
 const int OUTPUTS_COUNT = 8;
-boolean DEBUG_MODE = true;
+boolean DEBUG_MODE = false;
 boolean DRY_RUN = false;
 // EasyCAT buffer
 PROCBUFFER_OUT _EasyCAT_BufferOut;  // output process data buffer
 // canfd send count;
-uint32_t canfd_send_count = 0;
+volatile uint32_t canfd_send_count = 0;
 // canfd receive count;
-uint32_t canfd_receive_count = 0;
+volatile uint32_t canfd_receive_count = 0;
+
+
+
+
 
 
 CAN_FRAME_FD message;
@@ -68,6 +72,20 @@ int32_t target_positions[8] = {0, 0, 0, 0, 0, 0, 0, 0};
 int32_t target_velocities[8] = {0, 0, 0, 0, 0, 0, 0, 0};
 int32_t target_torques[8] = {0, 0, 0, 0, 0, 0, 0, 0};
 uint16_t control_words[8] = {0, 0, 0, 0, 0, 0, 0, 0};
+
+class MyCANListener : public CANListener {
+public:
+
+    void gotFrameFD(CAN_FRAME_FD *frame, int mailbox) override {
+        CAN_FRAME_FD rxFrame;
+        CAN1.readFD(rxFrame);
+        uint8_t module_id = (rxFrame.id & 0x00FF);
+        motor_drivers[module_id - 1].processCANFDMessage(rxFrame);
+        canfd_receive_count++;
+    }   
+};
+
+MyCANListener myCanListener;
 
 
 bool easyCAT_setup()
@@ -136,6 +154,7 @@ bool motorDriverSetup()
             motor_drivers[i].loadCurrentState();
         }
         vTaskDelay(200 / portTICK_PERIOD_MS);
+        ESP_LOGI("MotorDriver", "Checking driver error");
         bool all_drivers_error_free = true;
         for (int i = 0; i < MOTOR_DRIVER_COUNT; i++)
         {
@@ -181,31 +200,10 @@ bool motorDriverSetup()
             }
         }
 
-        // for (int i = 0; i < MOTOR_DRIVER_COUNT; i++)
-        // {
-        //     motor_drivers[i].loadCurrentState();
-        //     vTaskDelay(100 / portTICK_PERIOD_MS);
-        // }
-        //for (int i = 0; i < MOTOR_DRIVER_COUNT; i++)
-        //{
-        //    motor_drivers[i].setPositionControlMode();
-        //    vTaskDelay(100 / portTICK_PERIOD_MS);
-        //    motor_drivers[i].setZeroPosition();
-        //    vTaskDelay(100 / portTICK_PERIOD_MS);
-        //    motor_drivers[i].clearJointError();
-        //    vTaskDelay(100 / portTICK_PERIOD_MS);
-        //    motor_drivers[i].setDriverEnabled();
-        //    vTaskDelay(100 / portTICK_PERIOD_MS);
-        //}
+        ESP_LOGI("MotorDriver", "Setting control mode");
+
         for (int i = 0; i < MOTOR_DRIVER_COUNT; i++)
         {
-            // motor_drivers[i].setDriverDisabled();
-            // vTaskDelay(100 / portTICK_PERIOD_MS);
-            // motor_drivers[i].setZeroPosition();
-            // vTaskDelay(100 / portTICK_PERIOD_MS);
-            // motor_drivers[i].clearJointError();
-            // vTaskDelay(100 / portTICK_PERIOD_MS);
-
             if (CONTROL_MODE == RMTR_SERVO_MODE_POS)
             {
                 // Switch to position control mode
@@ -225,13 +223,15 @@ bool motorDriverSetup()
             //motor_drivers[i].setDriverEnabled();
             //vTaskDelay(100 / portTICK_PERIOD_MS);
         }
+
+        ESP_LOGI("MotorDriver", "Motor driver setup completed");
     return true;
 }
 
 void canfd_receive_task(void *pvParameters)
 {
     TickType_t last_wdt_reset = xTaskGetTickCount();
-    const TickType_t wdt_reset_period = pdMS_TO_TICKS(1000); 
+    //const TickType_t wdt_reset_period = pdMS_TO_TICKS(1000); 
     while (1)
     {
         CAN_FRAME_FD rxFrame;
@@ -248,15 +248,19 @@ void canfd_receive_task(void *pvParameters)
             //}
             //Serial.printf("\n");
         }
-        TickType_t now = xTaskGetTickCount();
-        if ((now - last_wdt_reset) >= wdt_reset_period)
-        {
-            vTaskDelay(1 / portTICK_PERIOD_MS);
-            last_wdt_reset = now;
+        vTaskDelayUntil(&last_wdt_reset, 1 / portTICK_PERIOD_MS);
+        //vTaskDelay(1 / portTICK_PERIOD_MS);
+        //TickType_t now = xTaskGetTickCount();
+        //if ((now - last_wdt_reset) >= wdt_reset_period)
+        //{
+        //    vTaskDelay(1 / portTICK_PERIOD_MS);
+        //    last_wdt_reset = now;
+        //    uint16_t rx_queue_available = CAN1.available();
+        //    ESP_LOGI("Queue", "RX Queue available: %u", rx_queue_available);
 
-            // オプション: リセットしたことをログに記録
-            ESP_LOGI("WDT", "WDT reset at %llu ms", (uint64_t)now * portTICK_PERIOD_MS);
-        }
+        //    // オプション: リセットしたことをログに記録
+        //    //ESP_LOGI("WDT", "WDT reset at %llu ms", (uint64_t)now * portTICK_PERIOD_MS);
+        //}
     }
 }
 
@@ -278,30 +282,33 @@ void canfd_task(void *pvParameters) {
         for (int i = 0; i < MOTOR_DRIVER_COUNT; i++)
         {
             motor_drivers[i].loadCurrentPosition();
-            //canfd_send_count++;
+            canfd_send_count++;
             motor_drivers[i].loadCurrentCurrent();
-            //canfd_send_count++;
+            canfd_send_count++;
             motor_drivers[i].loadCurrentVelocity();
-            //canfd_send_count++;
+            canfd_send_count++;
             
             if (CONTROL_MODE == RMTR_SERVO_MODE_POS)
             {
                 //Serial.printf("Target position %d: %d\n", i, target_positions[i]);
                 motor_drivers[i].setTargetPosition(target_positions[i]);
+                canfd_send_count++;
             }
             else if (CONTROL_MODE == RMTR_SERVO_MODE_VEL)
             {
                 //Serial.printf("Target velocity %d: %d\n", i, target_velocities[i]);
                 motor_drivers[i].setTargetVelocity(target_velocities[i]);
+                canfd_send_count++;
             }
             else if (CONTROL_MODE == RMTR_SERVO_MODE_CUR)
             {
                 motor_drivers[i].setTargetCurrent(target_torques[i]);
+                canfd_send_count++;
                 //Serial.printf("Target torque %d: %d\n", i, target_torques[i]);
             }
-            //canfd_send_count++;
-            vTaskDelay(1 / portTICK_PERIOD_MS);
+
         }
+        vTaskDelay(1 / portTICK_PERIOD_MS);
         send_control_tic_message();
     }
 }
@@ -360,10 +367,19 @@ void canfd_health_check_task(void *pvParameters) {
             // 正常
             ESP_LOGI("CANFD", "Send count: %u, Receive count: %u", canfd_send_count, canfd_receive_count);
         }
+        ESP_LOGI("CANFD", "task_MCPIntFD count: %u", CAN1.task_MCPIntFD_count);
+        ESP_LOGI("CANFD", "INT Handler count: %u", CAN1.int_handler_count);
+        ESP_LOGI("CANFD", "Handle dispatch count: %u", CAN1.handle_dispatch_count);
+        ESP_LOGI("CANFD", "RX Queue count: %u", CAN1.rx_queue_count);
+        ESP_LOGI("CANFD", "RX Queue available: %u", CAN1.available());
 
         // カウント数をリセット
         canfd_send_count = 0;
         canfd_receive_count = 0;
+        CAN1.task_MCPIntFD_count = 0;
+        CAN1.int_handler_count = 0;
+        CAN1.handle_dispatch_count = 0;
+        CAN1.rx_queue_count = 0;
 
         // 1秒待機
         vTaskDelay(1000 / portTICK_PERIOD_MS);
@@ -464,7 +480,7 @@ void EasyCAT_Application ()
     EasyCAT_BufferIn.Cust.StatusWord_7 = status_words[6];
     EasyCAT_BufferIn.Cust.StatusWord_8 = status_words[7];
 
-    sendEtherCATDataAsCANFD(EasyCAT_BufferOut, 0x600);
+    //sendEtherCATDataAsCANFD(EasyCAT_BufferOut, 0x600);
   }
 }
 
@@ -504,10 +520,11 @@ extern "C" void app_main(void)
     }
 	CAN1.watchFor(); 
 
+    CAN1.attachObj(&myCanListener);
 
     xTaskCreatePinnedToCore(canfd_task, "canfd_send_task", 4096, NULL, 5, NULL, 0);
-    xTaskCreatePinnedToCore(canfd_receive_task, "canfd_receive_task", 4096, NULL, 5, NULL, 1);
+    //xTaskCreatePinnedToCore(canfd_receive_task, "canfd_receive_task", 4096, NULL, 5, NULL, 1);
     xTaskCreatePinnedToCore(easyCAT_task, "easyCAT_task", 4096, NULL, 5, NULL, 0);
-    //xTaskCreatePinnedToCore(canfd_health_check_task, "canfd_health_check_task", 4096, NULL, 5, NULL, 0);
+    xTaskCreatePinnedToCore(canfd_health_check_task, "canfd_health_check_task", 4096, NULL, 5, NULL, 0);
 
 }
