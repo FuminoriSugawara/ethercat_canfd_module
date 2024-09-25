@@ -283,10 +283,10 @@ void canfd_task(void *pvParameters) {
         {
             motor_drivers[i].loadCurrentPosition();
             canfd_send_count++;
-            motor_drivers[i].loadCurrentCurrent();
-            canfd_send_count++;
-            motor_drivers[i].loadCurrentVelocity();
-            canfd_send_count++;
+            //motor_drivers[i].loadCurrentCurrent();
+            //canfd_send_count++;
+            //motor_drivers[i].loadCurrentVelocity();
+            //canfd_send_count++;
             
             if (CONTROL_MODE == RMTR_SERVO_MODE_POS)
             {
