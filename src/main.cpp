@@ -46,7 +46,7 @@ volatile uint32_t canfd_receive_count = 0;
 // Timer configuration
 #define TIMER_DIVIDER         2  // Hardware timer clock divider
 #define TIMER_SCALE           (TIMER_BASE_CLK / TIMER_DIVIDER)  // convert counter value to seconds
-#define TIMER_INTERVAL_SEC   (0.006) // 1ms interval
+#define TIMER_INTERVAL_SEC   (0.004) // 1ms interval
 
 TaskHandle_t canfdTaskHandle = NULL;
 TaskHandle_t easyCATTaskHandle = NULL;
@@ -287,8 +287,8 @@ void motorControl()
 {
     for (int i = 0; i < MOTOR_DRIVER_COUNT; i++)
     {
-        motor_drivers[i].loadCurrentPosition();
-        canfd_send_count++;
+        //motor_drivers[i].loadCurrentPosition();
+        //canfd_send_count++;
         // motor_drivers[i].loadCurrentCurrent();
         // canfd_send_count++;
         // motor_drivers[i].loadCurrentVelocity();

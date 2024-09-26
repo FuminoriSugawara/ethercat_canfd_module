@@ -209,11 +209,11 @@ void RealmanMotorDriver::processServoMessage(CAN_FRAME_FD &message)
     if (message.length != 16) {
         return;
     }
-    float current_current = (float)(bytesToInt32(&message.data.uint8[0]));
-    float current_velocity = (float) (bytesToInt32(&message.data.uint8[4])) / 50;
-    float current_position = (float) (bytesToInt32(&message.data.uint8[8])) / 10000.0;
-    uint16_t enable_state = bytesToUint16(&message.data.uint8[12]);
-    uint16_t error_state = bytesToUint16(&message.data.uint8[14]);
+    this->current_torque = bytesToInt32(&message.data.uint8[0]);
+    this->current_velocity = bytesToInt32(&message.data.uint8[4]);
+    this->current_position = bytesToInt32(&message.data.uint8[8]);
+    this->error_state = bytesToUint16(&message.data.uint8[14]);
+    //uint16_t enable_state = bytesToUint16(&message.data.uint8[12]);
     //Serial.printf("Current Current: %f\n", current_current);
     //Serial.printf("Current Velocity: %f\n", current_velocity);
     //Serial.printf("Current Position: %f\n", current_position);
@@ -432,7 +432,7 @@ void RealmanMotorDriver::processCANFDMessage(CAN_FRAME_FD &message)
         break;
     case MESSAGE_TYPE_RES_SERVO:
         //Serial.printf("Processing response message for servo\n");
-        //processServoMessage(message);
+        processServoMessage(message);
         break;
     case MESSAGE_TYPE_CMD_COMMON:
     case MESSAGE_TYPE_CMD_JSTATE:
