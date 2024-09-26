@@ -3,6 +3,7 @@
 #include <string.h>
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include "driver/timer.h"
 #include "driver/spi_master.h"
 #include "driver/uart.h"
 #include "esp_log.h"
@@ -42,6 +43,13 @@ volatile uint32_t canfd_send_count = 0;
 // canfd receive count;
 volatile uint32_t canfd_receive_count = 0;
 
+// Timer configuration
+#define TIMER_DIVIDER         2  // Hardware timer clock divider
+#define TIMER_SCALE           (TIMER_BASE_CLK / TIMER_DIVIDER)  // convert counter value to seconds
+#define TIMER_INTERVAL_SEC   (0.006) // 1ms interval
+
+TaskHandle_t canfdTaskHandle = NULL;
+TaskHandle_t easyCATTaskHandle = NULL;
 
 
 
@@ -49,17 +57,14 @@ volatile uint32_t canfd_receive_count = 0;
 
 CAN_FRAME_FD message;
 realman_motor_driver::RealmanMotorDriver motor_drivers[MOTOR_DRIVER_COUNT] = {
-    realman_motor_driver::RealmanMotorDriver(0x01, std::shared_ptr<CAN_COMMON>(&CAN1), DEBUG_MODE, DRY_RUN),
-    realman_motor_driver::RealmanMotorDriver(0x02, std::shared_ptr<CAN_COMMON>(&CAN1), DEBUG_MODE, DRY_RUN),
-    realman_motor_driver::RealmanMotorDriver(0x03, std::shared_ptr<CAN_COMMON>(&CAN1), DEBUG_MODE, DRY_RUN),
-    realman_motor_driver::RealmanMotorDriver(0x04, std::shared_ptr<CAN_COMMON>(&CAN1), DEBUG_MODE, DRY_RUN),
-    realman_motor_driver::RealmanMotorDriver(0x05, std::shared_ptr<CAN_COMMON>(&CAN1), DEBUG_MODE, DRY_RUN),
-    realman_motor_driver::RealmanMotorDriver(0x06, std::shared_ptr<CAN_COMMON>(&CAN1), DEBUG_MODE, DRY_RUN),
-    realman_motor_driver::RealmanMotorDriver(0x07, std::shared_ptr<CAN_COMMON>(&CAN1), DEBUG_MODE, DRY_RUN),
+    realman_motor_driver::RealmanMotorDriver(0x01, std::shared_ptr<MCP2517FD>(&CAN1), DEBUG_MODE, DRY_RUN),
+    realman_motor_driver::RealmanMotorDriver(0x02, std::shared_ptr<MCP2517FD>(&CAN1), DEBUG_MODE, DRY_RUN),
+    realman_motor_driver::RealmanMotorDriver(0x03, std::shared_ptr<MCP2517FD>(&CAN1), DEBUG_MODE, DRY_RUN),
+    realman_motor_driver::RealmanMotorDriver(0x04, std::shared_ptr<MCP2517FD>(&CAN1), DEBUG_MODE, DRY_RUN),
+    realman_motor_driver::RealmanMotorDriver(0x05, std::shared_ptr<MCP2517FD>(&CAN1), DEBUG_MODE, DRY_RUN),
+    realman_motor_driver::RealmanMotorDriver(0x06, std::shared_ptr<MCP2517FD>(&CAN1), DEBUG_MODE, DRY_RUN),
+    realman_motor_driver::RealmanMotorDriver(0x07, std::shared_ptr<MCP2517FD>(&CAN1), DEBUG_MODE, DRY_RUN),
 };
-
-//realman_motor_driver::RealmanMotorDriver motorDriver{0x07, std::shared_ptr<CAN_COMMON>(&CAN1)};
-
 
 //ACAN2517FD can(PIN_NUM_CS, SPI, 255);
 
@@ -88,10 +93,10 @@ public:
 MyCANListener myCanListener;
 
 
-bool easyCAT_setup()
+bool easyCATSetup()
 {
 
-    bool success = EasyCAT_Init(PIN_NUM_CS_HSPI, ASYNC);
+    bool success = EasyCAT_Init(PIN_NUM_CS_HSPI, DC_SYNC);
     if (success)
     {
         printf("EasyCAT initialized\n");
@@ -111,22 +116,27 @@ bool motorDriverSetup()
         uint8_t retry_count = 5;
         while (!all_drivers_connected)
         {
-            all_drivers_connected = true;
+            uint8_t connected_count = 0;
             for (int i = 0; i < MOTOR_DRIVER_COUNT; i++)
             {
                 // verify all motor drivers are connected
                 bool connection_state = motor_drivers[i].getConnectionState();
                 motor_driver_connection_states[i] = connection_state;
-                if (!connection_state)
+                if (connection_state) {
+                    Serial.printf("Motor driver %d connected\n", i+1);
+                    connected_count++;
+                    continue;
+                } else 
                 {
+                    vTaskDelay(100 / portTICK_PERIOD_MS);
                     motor_drivers[i].setConnectionOnline();
-                    all_drivers_connected = false;
+                    vTaskDelay(1000 / portTICK_PERIOD_MS);
                 }
-                vTaskDelay(1000 / portTICK_PERIOD_MS);
             }
-            if (all_drivers_connected)
+            if (connected_count == MOTOR_DRIVER_COUNT)
             {
                 Serial.println("All motor drivers connected");
+                all_drivers_connected = true;
                 break;
             }
             retry_count--;
@@ -143,8 +153,8 @@ bool motorDriverSetup()
                 }
                 break;
             }   
-            vTaskDelay(1000 / portTICK_PERIOD_MS);
-            Serial.printf("Retry count %d\n", retry_count);
+            //vTaskDelay(1000 / portTICK_PERIOD_MS);
+            //Serial.printf("Retry count %d\n", retry_count);
         }
 
         vTaskDelay(200 / portTICK_PERIOD_MS);
@@ -228,90 +238,97 @@ bool motorDriverSetup()
     return true;
 }
 
-void canfd_receive_task(void *pvParameters)
-{
-    TickType_t last_wdt_reset = xTaskGetTickCount();
-    //const TickType_t wdt_reset_period = pdMS_TO_TICKS(1000); 
-    while (1)
-    {
-        CAN_FRAME_FD rxFrame;
-        if (CAN1.readFD(rxFrame))
-        {
-            uint8_t module_id = (rxFrame.id & 0x00FF);
-            //Serial.printf("Received Module ID: 0x%02X\n", module_id);
-            motor_drivers[module_id - 1].processCANFDMessage(rxFrame);
-            canfd_receive_count++;
-            //Serial.printf("ID: 0x%04X\n", rxFrame.id);
-            //for (int i = 0; i < rxFrame.length; i++)
-            //{
-            //    Serial.printf("0x%02X ", rxFrame.data.uint8[i]);
-            //}
-            //Serial.printf("\n");
-        }
-        vTaskDelayUntil(&last_wdt_reset, 1 / portTICK_PERIOD_MS);
-        //vTaskDelay(1 / portTICK_PERIOD_MS);
-        //TickType_t now = xTaskGetTickCount();
-        //if ((now - last_wdt_reset) >= wdt_reset_period)
-        //{
-        //    vTaskDelay(1 / portTICK_PERIOD_MS);
-        //    last_wdt_reset = now;
-        //    uint16_t rx_queue_available = CAN1.available();
-        //    ESP_LOGI("Queue", "RX Queue available: %u", rx_queue_available);
+//void canfd_receive_task(void *pvParameters)
+//{
+//    TickType_t last_wdt_reset = xTaskGetTickCount();
+//    //const TickType_t wdt_reset_period = pdMS_TO_TICKS(1000); 
+//    while (1)
+//    {
+//        CAN_FRAME_FD rxFrame;
+//        if (CAN1.readFD(rxFrame))
+//        {
+//            uint8_t module_id = (rxFrame.id & 0x00FF);
+//            //Serial.printf("Received Module ID: 0x%02X\n", module_id);
+//            motor_drivers[module_id - 1].processCANFDMessage(rxFrame);
+//            canfd_receive_count++;
+//            //Serial.printf("ID: 0x%04X\n", rxFrame.id);
+//            //for (int i = 0; i < rxFrame.length; i++)
+//            //{
+//            //    Serial.printf("0x%02X ", rxFrame.data.uint8[i]);
+//            //}
+//            //Serial.printf("\n");
+//        }
+//        vTaskDelayUntil(&last_wdt_reset, 1 / portTICK_PERIOD_MS);
+//        //vTaskDelay(1 / portTICK_PERIOD_MS);
+//        //TickType_t now = xTaskGetTickCount();
+//        //if ((now - last_wdt_reset) >= wdt_reset_period)
+//        //{
+//        //    vTaskDelay(1 / portTICK_PERIOD_MS);
+//        //    last_wdt_reset = now;
+//        //    uint16_t rx_queue_available = CAN1.available();
+//        //    ESP_LOGI("Queue", "RX Queue available: %u", rx_queue_available);
+//
+//        //    // オプション: リセットしたことをログに記録
+//        //    //ESP_LOGI("WDT", "WDT reset at %llu ms", (uint64_t)now * portTICK_PERIOD_MS);
+//        //}
+//    }
+//}
 
-        //    // オプション: リセットしたことをログに記録
-        //    //ESP_LOGI("WDT", "WDT reset at %llu ms", (uint64_t)now * portTICK_PERIOD_MS);
-        //}
-    }
-}
-
-void send_control_tic_message() {
+void sendControlTicMessage() {
     CAN_FRAME_FD control_tic_message;
     control_tic_message.id = 0x7F0;
     control_tic_message.fdMode = 1;
     control_tic_message.rrs = 0;
     control_tic_message.length = 0;
-    CAN1.sendFrameFD(control_tic_message);
+    CAN1.WriteFrame(control_tic_message);
 }
 
-void canfd_task(void *pvParameters) {
-    motorDriverSetup();
-    //while (1) {
-    //    vTaskDelay(10 / portTICK_PERIOD_MS);
-    //}
-    while (1) {
-        for (int i = 0; i < MOTOR_DRIVER_COUNT; i++)
+void motorControl()
+{
+    for (int i = 0; i < MOTOR_DRIVER_COUNT; i++)
+    {
+        motor_drivers[i].loadCurrentPosition();
+        canfd_send_count++;
+        // motor_drivers[i].loadCurrentCurrent();
+        // canfd_send_count++;
+        // motor_drivers[i].loadCurrentVelocity();
+        // canfd_send_count++;
+
+        if (CONTROL_MODE == RMTR_SERVO_MODE_POS)
         {
-            motor_drivers[i].loadCurrentPosition();
+            // Serial.printf("Target position %d: %d\n", i, target_positions[i]);
+            motor_drivers[i].setTargetPosition(target_positions[i]);
             canfd_send_count++;
-            //motor_drivers[i].loadCurrentCurrent();
-            //canfd_send_count++;
-            //motor_drivers[i].loadCurrentVelocity();
-            //canfd_send_count++;
-            
-            if (CONTROL_MODE == RMTR_SERVO_MODE_POS)
-            {
-                //Serial.printf("Target position %d: %d\n", i, target_positions[i]);
-                motor_drivers[i].setTargetPosition(target_positions[i]);
-                canfd_send_count++;
-            }
-            else if (CONTROL_MODE == RMTR_SERVO_MODE_VEL)
-            {
-                //Serial.printf("Target velocity %d: %d\n", i, target_velocities[i]);
-                motor_drivers[i].setTargetVelocity(target_velocities[i]);
-                canfd_send_count++;
-            }
-            else if (CONTROL_MODE == RMTR_SERVO_MODE_CUR)
-            {
-                motor_drivers[i].setTargetCurrent(target_torques[i]);
-                canfd_send_count++;
-                //Serial.printf("Target torque %d: %d\n", i, target_torques[i]);
-            }
-
         }
-        vTaskDelay(1 / portTICK_PERIOD_MS);
-        send_control_tic_message();
+        else if (CONTROL_MODE == RMTR_SERVO_MODE_VEL)
+        {
+            // Serial.printf("Target velocity %d: %d\n", i, target_velocities[i]);
+            motor_drivers[i].setTargetVelocity(target_velocities[i]);
+            canfd_send_count++;
+        }
+        else if (CONTROL_MODE == RMTR_SERVO_MODE_CUR)
+        {
+            motor_drivers[i].setTargetCurrent(target_torques[i]);
+            canfd_send_count++;
+            // Serial.printf("Target torque %d: %d\n", i, target_torques[i]);
+        }
     }
+
+    sendControlTicMessage();
 }
+
+//void canfd_task(void *pvParameters) {
+//    //while (1) {
+//    //    vTaskDelay(10 / portTICK_PERIOD_MS);
+//    //}
+//    while (1) {
+//        // Wait for notification from EasyCAT task
+//        ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
+//        //ESP_LOGI("CANFD", "Received EasyCAT notification");
+//        motorControl();
+//        //vTaskDelay(1 / portTICK_PERIOD_MS);
+//    }
+//}
 
 void sendEtherCATDataAsCANFD(const PROCBUFFER_OUT& ethercat_data, uint32_t canId) {
     CAN_FRAME_FD response;
@@ -353,10 +370,10 @@ void sendEtherCATDataAsCANFD(const PROCBUFFER_OUT& ethercat_data, uint32_t canId
     response.length = data_size;  // Set the actual data length
 
     // Send the frame
-    CAN1.sendFrameFD(response);
+    CAN1.WriteFrame(response);
 }
 
-void canfd_health_check_task(void *pvParameters) {
+void canfdHealthCheckTask(void *pvParameters) {
     // 送信カウント数と受信カウント数を1秒ごとに比較
     while (1) {
         // カウント数を比較
@@ -388,116 +405,165 @@ void canfd_health_check_task(void *pvParameters) {
 }
 
 
-
-void EasyCAT_Application ()                                        
-
-{
-  #define ECAT_APP_CYCLE_TIME_MS 10
-
-  unsigned long nowMs = millis();
-  if (nowMs - previousMs >= ECAT_APP_CYCLE_TIME_MS)
-  {      
-    previousMs = nowMs;
-    
-
-    _EasyCAT_BufferOut = EasyCAT_BufferOut;
-
+void loadTargetValuesFromEtherCAT(PROCBUFFER_OUT & buffOut) {
     // update target position
-    target_positions[0] = _EasyCAT_BufferOut.Cust.Position_1;
-    target_positions[1] = _EasyCAT_BufferOut.Cust.Position_2;
-    target_positions[2] = _EasyCAT_BufferOut.Cust.Position_3;
-    target_positions[3] = _EasyCAT_BufferOut.Cust.Position_4;
-    target_positions[4] = _EasyCAT_BufferOut.Cust.Position_5;
-    target_positions[5] = _EasyCAT_BufferOut.Cust.Position_6;
-    target_positions[6] = _EasyCAT_BufferOut.Cust.Position_7;
-    target_positions[7] = _EasyCAT_BufferOut.Cust.Position_8;
+    target_positions[0] = buffOut.Cust.Position_1;
+    target_positions[1] = buffOut.Cust.Position_2;
+    target_positions[2] = buffOut.Cust.Position_3;
+    target_positions[3] = buffOut.Cust.Position_4;
+    target_positions[4] = buffOut.Cust.Position_5;
+    target_positions[5] = buffOut.Cust.Position_6;
+    target_positions[6] = buffOut.Cust.Position_7;
+    target_positions[7] = buffOut.Cust.Position_8;
     // update target velocity
-    target_velocities[0] = _EasyCAT_BufferOut.Cust.Velocity_1;
-    target_velocities[1] = _EasyCAT_BufferOut.Cust.Velocity_2;
-    target_velocities[2] = _EasyCAT_BufferOut.Cust.Velocity_3;
-    target_velocities[3] = _EasyCAT_BufferOut.Cust.Velocity_4;
-    target_velocities[4] = _EasyCAT_BufferOut.Cust.Velocity_5;
-    target_velocities[5] = _EasyCAT_BufferOut.Cust.Velocity_6;
-    target_velocities[6] = _EasyCAT_BufferOut.Cust.Velocity_7;
-    target_velocities[7] = _EasyCAT_BufferOut.Cust.Velocity_8;
+    target_velocities[0] = buffOut.Cust.Velocity_1;
+    target_velocities[1] = buffOut.Cust.Velocity_2;
+    target_velocities[2] = buffOut.Cust.Velocity_3;
+    target_velocities[3] = buffOut.Cust.Velocity_4;
+    target_velocities[4] = buffOut.Cust.Velocity_5;
+    target_velocities[5] = buffOut.Cust.Velocity_6;
+    target_velocities[6] = buffOut.Cust.Velocity_7;
+    target_velocities[7] = buffOut.Cust.Velocity_8;
     // update target torque
-    target_torques[0] = _EasyCAT_BufferOut.Cust.Torque_1;
-    target_torques[1] = _EasyCAT_BufferOut.Cust.Torque_2;
-    target_torques[2] = _EasyCAT_BufferOut.Cust.Torque_3;
-    target_torques[3] = _EasyCAT_BufferOut.Cust.Torque_4;
-    target_torques[4] = _EasyCAT_BufferOut.Cust.Torque_5;
-    target_torques[5] = _EasyCAT_BufferOut.Cust.Torque_6;
-    target_torques[6] = _EasyCAT_BufferOut.Cust.Torque_7;
-    target_torques[7] = _EasyCAT_BufferOut.Cust.Torque_8;
+    target_torques[0] = buffOut.Cust.Torque_1;
+    target_torques[1] = buffOut.Cust.Torque_2;
+    target_torques[2] = buffOut.Cust.Torque_3;
+    target_torques[3] = buffOut.Cust.Torque_4;
+    target_torques[4] = buffOut.Cust.Torque_5;
+    target_torques[5] = buffOut.Cust.Torque_6;
+    target_torques[6] = buffOut.Cust.Torque_7;
+    target_torques[7] = buffOut.Cust.Torque_8;
     // update control word
-    control_words[0] = _EasyCAT_BufferOut.Cust.ControlWord_1;
-    control_words[1] = _EasyCAT_BufferOut.Cust.ControlWord_2;
-    control_words[2] = _EasyCAT_BufferOut.Cust.ControlWord_3;
-    control_words[3] = _EasyCAT_BufferOut.Cust.ControlWord_4;
-    control_words[4] = _EasyCAT_BufferOut.Cust.ControlWord_5;
-    control_words[5] = _EasyCAT_BufferOut.Cust.ControlWord_6;
-    control_words[6] = _EasyCAT_BufferOut.Cust.ControlWord_7;
-    control_words[7] = _EasyCAT_BufferOut.Cust.ControlWord_8;
+    control_words[0] = buffOut.Cust.ControlWord_1;
+    control_words[1] = buffOut.Cust.ControlWord_2;
+    control_words[2] = buffOut.Cust.ControlWord_3;
+    control_words[3] = buffOut.Cust.ControlWord_4;
+    control_words[4] = buffOut.Cust.ControlWord_5;
+    control_words[5] = buffOut.Cust.ControlWord_6;
+    control_words[6] = buffOut.Cust.ControlWord_7;
+    control_words[7] = buffOut.Cust.ControlWord_8;
+}
 
+// load current values from motor drivers
+void loadCurrentValuesFromMotorDrivers() {
     for (int i = 0; i < MOTOR_DRIVER_COUNT; i++)
     {
-
         actual_positions[i] = (int32_t)(motor_drivers[i].getCurrentPosition());
         actual_torques[i] = (int32_t)(motor_drivers[i].getCurrentTorque());
         actual_velocities[i] = (int32_t)(motor_drivers[i].getCurrentVelocity());
     }
-
-    EasyCAT_BufferIn.Cust.ActualPosition_1 = actual_positions[0];
-    EasyCAT_BufferIn.Cust.ActualPosition_2 = actual_positions[1];
-    EasyCAT_BufferIn.Cust.ActualPosition_3 = actual_positions[2];
-    EasyCAT_BufferIn.Cust.ActualPosition_4 = actual_positions[3];
-    EasyCAT_BufferIn.Cust.ActualPosition_5 = actual_positions[4];
-    EasyCAT_BufferIn.Cust.ActualPosition_6 = actual_positions[5];
-    EasyCAT_BufferIn.Cust.ActualPosition_7 = actual_positions[6];
-    EasyCAT_BufferIn.Cust.ActualPosition_8 = actual_positions[7];
-    EasyCAT_BufferIn.Cust.ActualVelocity_1 = actual_velocities[0];
-    EasyCAT_BufferIn.Cust.ActualVelocity_2 = actual_velocities[1];
-    EasyCAT_BufferIn.Cust.ActualVelocity_3 = actual_velocities[2];
-    EasyCAT_BufferIn.Cust.ActualVelocity_4 = actual_velocities[3];
-    EasyCAT_BufferIn.Cust.ActualVelocity_5 = actual_velocities[4];
-    EasyCAT_BufferIn.Cust.ActualVelocity_6 = actual_velocities[5];
-    EasyCAT_BufferIn.Cust.ActualVelocity_7 = actual_velocities[6];
-    EasyCAT_BufferIn.Cust.ActualVelocity_8 = actual_velocities[7];
-    EasyCAT_BufferIn.Cust.ActualTorque_1 = actual_torques[0];
-    EasyCAT_BufferIn.Cust.ActualTorque_2 = actual_torques[1];
-    EasyCAT_BufferIn.Cust.ActualTorque_3 = actual_torques[2];
-    EasyCAT_BufferIn.Cust.ActualTorque_4 = actual_torques[3];
-    EasyCAT_BufferIn.Cust.ActualTorque_5 = actual_torques[4];
-    EasyCAT_BufferIn.Cust.ActualTorque_6 = actual_torques[5];
-    EasyCAT_BufferIn.Cust.ActualTorque_7 = actual_torques[6];
-    EasyCAT_BufferIn.Cust.ActualTorque_8 = actual_torques[7];
-    EasyCAT_BufferIn.Cust.StatusWord_1 = status_words[0];
-    EasyCAT_BufferIn.Cust.StatusWord_2 = status_words[1];
-    EasyCAT_BufferIn.Cust.StatusWord_3 = status_words[2];
-    EasyCAT_BufferIn.Cust.StatusWord_4 = status_words[3];
-    EasyCAT_BufferIn.Cust.StatusWord_5 = status_words[4];
-    EasyCAT_BufferIn.Cust.StatusWord_6 = status_words[5];
-    EasyCAT_BufferIn.Cust.StatusWord_7 = status_words[6];
-    EasyCAT_BufferIn.Cust.StatusWord_8 = status_words[7];
-
-    //sendEtherCATDataAsCANFD(EasyCAT_BufferOut, 0x600);
-  }
 }
 
-void easyCAT_task(void *pvParameters) {
-    bool success = easyCAT_setup();  // EasyCAT初期化
-    if (!success) {
-        printf("EasyCAT initialization failed\n");
-        return;
-    }
+// set current values to EasyCAT buffer
+void setCurrentValuesToEasyCATBuffer(PROCBUFFER_IN & buffIn) {
+    buffIn.Cust.ActualPosition_1 = actual_positions[0];
+    buffIn.Cust.ActualPosition_2 = actual_positions[1];
+    buffIn.Cust.ActualPosition_3 = actual_positions[2];
+    buffIn.Cust.ActualPosition_4 = actual_positions[3];
+    buffIn.Cust.ActualPosition_5 = actual_positions[4];
+    buffIn.Cust.ActualPosition_6 = actual_positions[5];
+    buffIn.Cust.ActualPosition_7 = actual_positions[6];
+    buffIn.Cust.ActualPosition_8 = actual_positions[7];
+    buffIn.Cust.ActualVelocity_1 = actual_velocities[0];
+    buffIn.Cust.ActualVelocity_2 = actual_velocities[1];
+    buffIn.Cust.ActualVelocity_3 = actual_velocities[2];
+    buffIn.Cust.ActualVelocity_4 = actual_velocities[3];
+    buffIn.Cust.ActualVelocity_5 = actual_velocities[4];
+    buffIn.Cust.ActualVelocity_6 = actual_velocities[5];
+    buffIn.Cust.ActualVelocity_7 = actual_velocities[6];
+    buffIn.Cust.ActualVelocity_8 = actual_velocities[7];
+    buffIn.Cust.ActualTorque_1 = actual_torques[0];
+    buffIn.Cust.ActualTorque_2 = actual_torques[1];
+    buffIn.Cust.ActualTorque_3 = actual_torques[2];
+    buffIn.Cust.ActualTorque_4 = actual_torques[3];
+    buffIn.Cust.ActualTorque_5 = actual_torques[4];
+    buffIn.Cust.ActualTorque_6 = actual_torques[5];
+    buffIn.Cust.ActualTorque_7 = actual_torques[6];
+    buffIn.Cust.ActualTorque_8 = actual_torques[7];
+    buffIn.Cust.StatusWord_1 = status_words[0];
+    buffIn.Cust.StatusWord_2 = status_words[1];
+    buffIn.Cust.StatusWord_3 = status_words[2];
+    buffIn.Cust.StatusWord_4 = status_words[3];
+    buffIn.Cust.StatusWord_5 = status_words[4];
+    buffIn.Cust.StatusWord_6 = status_words[5];
+    buffIn.Cust.StatusWord_7 = status_words[6];
+    buffIn.Cust.StatusWord_8 = status_words[7];
+}
 
-    printf("EasyCAT task started\n");
+
+
+void EasyCAT_Application ()                                        
+
+{
+
+
+
+
+    //sendEtherCATDataAsCANFD(EasyCAT_BufferOut, 0x600);
+}
+
+
+void easyCAT_task(void *pvParameters) {
+    
     while (1) {
-        unsigned char status = EasyCAT_MainTask();
+        // Wait for notification from ISR
+        ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
+        //ESP_LOGI("EasyCAT", "EasyCAT task started");
+        EasyCAT_MainTask();
         // printf("EasyCAT status: %d\n", status);
-        EasyCAT_Application();
-        vTaskDelay(1 / portTICK_PERIOD_MS);
+        loadTargetValuesFromEtherCAT(EasyCAT_BufferOut);
+        //vTaskDelay(1 / portTICK_PERIOD_MS);
+        //xTaskNotifyGive(canfdTaskHandle);
+        motorControl();
+        loadCurrentValuesFromMotorDrivers();
+        setCurrentValuesToEasyCATBuffer(EasyCAT_BufferIn);
+        //vTaskDelay(1 / portTICK_PERIOD_MS);
     }
+}
+
+
+// Timer ISR callback
+static bool IRAM_ATTR timer_group_isr_callback(void *args) {
+    BaseType_t xHigherPriorityTaskWoken = pdFALSE;
+
+    // Notify Task A to read data from Device A
+    vTaskNotifyGiveFromISR(easyCATTaskHandle, &xHigherPriorityTaskWoken);
+
+    // Reset the timer counter value
+    TIMERG0.hw_timer[TIMER_0].update = 1;
+    TIMERG0.int_clr_timers.t0 = 1;
+
+    return xHigherPriorityTaskWoken == pdTRUE;
+}
+
+void init_timer() {
+    // タイマーの設定構造体を初期化
+    timer_config_t config = {
+        .alarm_en = TIMER_ALARM_EN,       // アラーム（割り込み）を有効化
+        .counter_en = TIMER_PAUSE,        // 初期状態は停止
+        .intr_type = TIMER_INTR_LEVEL,    // レベルトリガー割り込み
+        .counter_dir = TIMER_COUNT_UP,    // カウンターの方向（上昇）
+        .auto_reload = TIMER_AUTORELOAD_EN, // 自動リロードを有効化
+        .divider = TIMER_DIVIDER          // タイマーのクロック分周比
+    };
+
+    // タイマーを初期化
+    ESP_ERROR_CHECK(timer_init(TIMER_GROUP_0, TIMER_0, &config));
+
+    // カウンター初期値を0に設定
+    ESP_ERROR_CHECK(timer_set_counter_value(TIMER_GROUP_0, TIMER_0, 0));
+
+    // アラーム値を設定（これが割り込みのタイミングを決定）
+    ESP_ERROR_CHECK(timer_set_alarm_value(TIMER_GROUP_0, TIMER_0, TIMER_INTERVAL_SEC * TIMER_SCALE));
+
+    // 割り込みを有効化
+    ESP_ERROR_CHECK(timer_enable_intr(TIMER_GROUP_0, TIMER_0));
+
+    // 割り込みハンドラを設定
+    ESP_ERROR_CHECK(timer_isr_callback_add(TIMER_GROUP_0, TIMER_0, timer_group_isr_callback, NULL, 0));
+
+    // タイマーを開始
+    ESP_ERROR_CHECK(timer_start(TIMER_GROUP_0, TIMER_0));
 }
 
 extern "C" void app_main(void)
@@ -507,6 +573,15 @@ extern "C" void app_main(void)
 
     Serial.begin(115200);
     //CAN1.setDebuggingMode(true);
+
+    bool easyCATSetupSuccess = easyCATSetup(); // EasyCAT初期化
+    if (!easyCATSetupSuccess)
+    {
+        printf("EasyCAT initialization failed\n");
+        return;
+    }
+
+    printf("EasyCAT task started\n");
 
 
     printf("Starting CAN FD task\n");
@@ -522,9 +597,14 @@ extern "C" void app_main(void)
 
     CAN1.attachObj(&myCanListener);
 
-    xTaskCreatePinnedToCore(canfd_task, "canfd_send_task", 4096, NULL, 5, NULL, 0);
+    motorDriverSetup();
+
+
+
     //xTaskCreatePinnedToCore(canfd_receive_task, "canfd_receive_task", 4096, NULL, 5, NULL, 1);
-    xTaskCreatePinnedToCore(easyCAT_task, "easyCAT_task", 4096, NULL, 5, NULL, 0);
-    xTaskCreatePinnedToCore(canfd_health_check_task, "canfd_health_check_task", 4096, NULL, 5, NULL, 0);
+    xTaskCreatePinnedToCore(easyCAT_task, "easyCAT-task", 4096, NULL, 6, &easyCATTaskHandle , 0);
+    //xTaskCreatePinnedToCore(canfd_task, "canfd-send-task", 4096, NULL, 5, &canfdTaskHandle , 0);
+    xTaskCreatePinnedToCore(canfdHealthCheckTask, "canfd_health_check_task", 4096, NULL, 1, NULL, 0);
+    init_timer();
 
 }

@@ -2,7 +2,7 @@
 #include "RealmanMotorDriver.hpp"
 using namespace realman_motor_driver;
 
-RealmanMotorDriver::RealmanMotorDriver(uint8_t module_id, std::shared_ptr<CAN_COMMON> can_handler, boolean debug_mode, boolean dry_run) {
+RealmanMotorDriver::RealmanMotorDriver(uint8_t module_id, std::shared_ptr<MCP2517FD> can_handler, boolean debug_mode, boolean dry_run) {
     this->can_handler = can_handler;
     this->module_id = module_id;
     this->IS_DEBUG = debug_mode;
@@ -368,7 +368,8 @@ void RealmanMotorDriver::transmitMessage(uint16_t message_type, BytesUnion_FD da
     txFrame.fdMode = 1;
     txFrame.data = data;
     txFrame.length = length;
-    this->can_handler->sendFrameFD(txFrame);
+    //this->can_handler->sendFrameFD(txFrame);
+    this->can_handler->WriteFrame(txFrame);
 }
 
 void RealmanMotorDriver::transmitDummyMessage(uint16_t message_type, BytesUnion_FD data, uint8_t length)
