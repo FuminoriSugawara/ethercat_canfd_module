@@ -350,6 +350,80 @@ void RealmanMotorDriver::setTargetCurrent(int32_t target_current)
     this->transmitMessage(MESSAGE_TYPE_CMD_COMMON, data, 6);
 }
 
+void RealmanMotorDriver::sendMultipleTargetPositions(const std::vector<int32_t>& target_positions) {
+        std::vector<std::pair<uint16_t, CAN_FRAME_FD>> messages;
+        messages.reserve(target_positions.size());
+
+        for (size_t i = 0; i < target_positions.size(); ++i) {
+            CAN_FRAME_FD frame;
+            frame.id = this->module_id | MESSAGE_TYPE_CMD_POS;
+            frame.fdMode = 1;
+            frame.rrs = 0;
+            frame.length = 4;
+
+            uint32_t target_position_int = static_cast<uint32_t>(target_positions[i]);
+            frame.data.uint8[0] = (target_position_int & 0x000000FF);
+            frame.data.uint8[1] = (target_position_int & 0x0000FF00) >> 8;
+            frame.data.uint8[2] = (target_position_int & 0x00FF0000) >> 16;
+            frame.data.uint8[3] = (target_position_int & 0xFF000000) >> 24;
+
+            messages.emplace_back(frame.id, frame);
+        }
+
+        this->can_handler->WriteMultipleFrameBuffers(messages);
+    }
+
+    void RealmanMotorDriver::sendMultipleTargetVelocities(const std::vector<int32_t>& target_velocities) {
+        std::vector<std::pair<uint16_t, CAN_FRAME_FD>> messages;
+        messages.reserve(target_velocities.size());
+
+        for (const auto& velocity : target_velocities) {
+            CAN_FRAME_FD frame;
+            frame.id = this->module_id | MESSAGE_TYPE_CMD_COMMON;
+            frame.fdMode = 1;
+            frame.rrs = 0;
+            frame.length = 6;
+
+            frame.data.uint8[0] = 0x02;
+            frame.data.uint8[1] = 0x34;
+            frame.data.uint8[2] = (velocity & 0x000000FF);
+            frame.data.uint8[3] = (velocity & 0x0000FF00) >> 8;
+            frame.data.uint8[4] = (velocity & 0x00FF0000) >> 16;
+            frame.data.uint8[5] = (velocity & 0xFF000000) >> 24;
+
+            messages.emplace_back(frame.id, frame);
+        }
+
+        this->can_handler->WriteMultipleFrameBuffers(messages);
+    }
+
+    void RealmanMotorDriver::sendMultipleTargetCurrents(const std::vector<int32_t>& target_currents) {
+        std::vector<std::pair<uint16_t, CAN_FRAME_FD>> messages;
+        messages.reserve(target_currents.size());
+
+        for (int32_t current : target_currents) {
+            CAN_FRAME_FD frame;
+            frame.id = this->module_id | MESSAGE_TYPE_CMD_COMMON;
+            frame.fdMode = 1;
+            frame.rrs = 0;
+            frame.length = 6;
+
+            if (current > 2000) current = 2000;  // 安全のため、電流を2000に制限
+
+            frame.data.uint8[0] = 0x02;
+            frame.data.uint8[1] = 0x32;
+            frame.data.uint8[2] = (current & 0x000000FF);
+            frame.data.uint8[3] = (current & 0x0000FF00) >> 8;
+            frame.data.uint8[4] = (current & 0x00FF0000) >> 16;
+            frame.data.uint8[5] = (current & 0xFF000000) >> 24;
+
+            messages.emplace_back(frame.id, frame);
+        }
+
+        this->can_handler->WriteMultipleFrameBuffers(messages);
+    }
+
+
 void RealmanMotorDriver::setZeroPosition(void)
 {
     BytesUnion_FD data;

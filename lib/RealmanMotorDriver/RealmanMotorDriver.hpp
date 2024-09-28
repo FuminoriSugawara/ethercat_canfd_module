@@ -103,6 +103,9 @@ namespace realman_motor_driver
         void setTargetPosition(int32_t target_position);
         void setTargetVelocity(int32_t target_velocity);
         void setTargetCurrent(int32_t target_current);
+        void sendMultipleTargetPositions(const std::vector<int32_t>& target_positions);
+        void sendMultipleTargetVelocities(const std::vector<int32_t>& target_velocities);
+        void sendMultipleTargetCurrents(const std::vector<int32_t>& target_currents);
         void setZeroPosition(void);
         void loadCurrentState(void);
         void loadCurrentCurrent(void);

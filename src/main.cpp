@@ -285,36 +285,30 @@ void sendControlTicMessage() {
 
 void motorControl()
 {
-    for (int i = 0; i < MOTOR_DRIVER_COUNT; i++)
-    {
-        //motor_drivers[i].loadCurrentPosition();
-        //canfd_send_count++;
-        // motor_drivers[i].loadCurrentCurrent();
-        // canfd_send_count++;
-        // motor_drivers[i].loadCurrentVelocity();
-        // canfd_send_count++;
+    std::vector<int32_t> target_values(MOTOR_DRIVER_COUNT);
 
-        if (CONTROL_MODE == RMTR_SERVO_MODE_POS)
-        {
-            // Serial.printf("Target position %d: %d\n", i, target_positions[i]);
-            motor_drivers[i].setTargetPosition(target_positions[i]);
-            canfd_send_count++;
-        }
-        else if (CONTROL_MODE == RMTR_SERVO_MODE_VEL)
-        {
-            // Serial.printf("Target velocity %d: %d\n", i, target_velocities[i]);
-            motor_drivers[i].setTargetVelocity(target_velocities[i]);
-            canfd_send_count++;
-        }
-        else if (CONTROL_MODE == RMTR_SERVO_MODE_CUR)
-        {
-            motor_drivers[i].setTargetCurrent(target_torques[i]);
-            canfd_send_count++;
-            // Serial.printf("Target torque %d: %d\n", i, target_torques[i]);
-        }
+    if (CONTROL_MODE == RMTR_SERVO_MODE_POS)
+    {
+        std::copy(target_positions, target_positions + MOTOR_DRIVER_COUNT, target_values.begin());
+        motor_drivers[0].sendMultipleTargetPositions(target_values);
+        canfd_send_count += MOTOR_DRIVER_COUNT;
+        ESP_LOGI("MotorDriver", "Sending target positions");
+    }
+    else if (CONTROL_MODE == RMTR_SERVO_MODE_VEL)
+    {
+        std::copy(target_velocities, target_velocities + MOTOR_DRIVER_COUNT, target_values.begin());
+        motor_drivers[0].sendMultipleTargetVelocities(target_values);
+        canfd_send_count += MOTOR_DRIVER_COUNT;
+    }
+    else if (CONTROL_MODE == RMTR_SERVO_MODE_CUR)
+    {
+        std::copy(target_torques, target_torques + MOTOR_DRIVER_COUNT, target_values.begin());
+        motor_drivers[0].sendMultipleTargetCurrents(target_values);
+        canfd_send_count += MOTOR_DRIVER_COUNT;
     }
 
-    sendControlTicMessage();
+    //sendControlTicMessage();
+    
 }
 
 //void canfd_task(void *pvParameters) {
@@ -506,6 +500,7 @@ void EasyCAT_Application ()
 void easyCAT_task(void *pvParameters) {
     
     while (1) {
+        ESP_LOGI("EasyCAT", "Waiting for notification");
         // Wait for notification from ISR
         ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
         //ESP_LOGI("EasyCAT", "EasyCAT task started");
@@ -597,14 +592,14 @@ extern "C" void app_main(void)
 
     CAN1.attachObj(&myCanListener);
 
-    motorDriverSetup();
+    //motorDriverSetup();
 
 
 
     //xTaskCreatePinnedToCore(canfd_receive_task, "canfd_receive_task", 4096, NULL, 5, NULL, 1);
     xTaskCreatePinnedToCore(easyCAT_task, "easyCAT-task", 4096, NULL, 6, &easyCATTaskHandle , 0);
     //xTaskCreatePinnedToCore(canfd_task, "canfd-send-task", 4096, NULL, 5, &canfdTaskHandle , 0);
-    xTaskCreatePinnedToCore(canfdHealthCheckTask, "canfd_health_check_task", 4096, NULL, 1, NULL, 0);
+    //xTaskCreatePinnedToCore(canfdHealthCheckTask, "canfd_health_check_task", 4096, NULL, 1, NULL, 0);
     init_timer();
 
 }
