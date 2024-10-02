@@ -13,7 +13,7 @@
   #define SpiSpeed        42000000
 
 #elif defined (ARDUINO_ARCH_ESP32)  
-  #define SpiSpeed        10000000
+  #define SpiSpeed        19000000
 #else
   #error "Architecture not supported"
 #endif
