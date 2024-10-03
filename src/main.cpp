@@ -43,6 +43,12 @@ typedef struct {
     int64_t setCurrentValuesToEasyCATBuffer;
 } TimeLog;
 
+typedef struct {
+    TimeLog average;
+    TimeLog min;
+    TimeLog max;
+} TimeLogStats;
+
 TimeLog timeLog[TIME_LOG_BUFFER_SIZE];
 int timeLogIndex = 0;
 
@@ -138,6 +144,117 @@ int64_t measureTime( void (*func)(void) )
     func();
     int64_t end = esp_timer_get_time();
     return end - start;
+}
+
+TimeLogStats calcStats() {
+    TimeLogStats stats;
+
+    int64_t easyCATApplicationMin = INT64_MAX;
+    int64_t loadTargetValuesFromEtherCATMin = INT64_MAX;
+    int64_t motorControlMin = INT64_MAX;
+    int64_t loadCurrentValuesFromMotorDriversMin = INT64_MAX;
+    int64_t setCurrentValuesToEasyCATBufferMin = INT64_MAX;
+
+    int64_t easyCATApplicationMax = 0;
+    int64_t loadTargetValuesFromEtherCATMax = 0;
+    int64_t motorControlMax = 0;
+    int64_t loadCurrentValuesFromMotorDriversMax = 0;
+    int64_t setCurrentValuesToEasyCATBufferMax = 0;
+
+
+    int64_t easyCATApplicationSum = 0;
+    int64_t loadTargetValuesFromEtherCATSum = 0;
+    int64_t motorControlSum = 0;
+    int64_t loadCurrentValuesFromMotorDriversSum = 0;
+    int64_t setCurrentValuesToEasyCATBufferSum = 0;
+    if (timeLogIndex == 0)
+    {
+        return stats;
+    }
+    int32_t size = ((timeLogIndex + 1)< TIME_LOG_BUFFER_SIZE) ? (timeLogIndex + 1) : TIME_LOG_BUFFER_SIZE;
+    for (int i = 0; i < size; i++)
+    {
+        easyCATApplicationSum += timeLog[i].easyCATApplication;
+        loadTargetValuesFromEtherCATSum += timeLog[i].loadTargetValuesFromEtherCAT;
+        motorControlSum += timeLog[i].motorControl;
+        loadCurrentValuesFromMotorDriversSum += timeLog[i].loadCurrentValuesFromMotorDrivers;
+        setCurrentValuesToEasyCATBufferSum += timeLog[i].setCurrentValuesToEasyCATBuffer;
+
+        if (timeLog[i].easyCATApplication < easyCATApplicationMin)
+        {
+            easyCATApplicationMin = timeLog[i].easyCATApplication;
+        }
+        if (timeLog[i].loadTargetValuesFromEtherCAT < loadTargetValuesFromEtherCATMin)
+        {
+            loadTargetValuesFromEtherCATMin = timeLog[i].loadTargetValuesFromEtherCAT;
+        }
+
+        if (timeLog[i].motorControl < motorControlMin)
+        {
+            motorControlMin = timeLog[i].motorControl;
+        }
+
+        if (timeLog[i].loadCurrentValuesFromMotorDrivers < loadCurrentValuesFromMotorDriversMin)
+        {
+            loadCurrentValuesFromMotorDriversMin = timeLog[i].loadCurrentValuesFromMotorDrivers;
+        }
+
+        if (timeLog[i].setCurrentValuesToEasyCATBuffer < setCurrentValuesToEasyCATBufferMin)
+        {
+            setCurrentValuesToEasyCATBufferMin = timeLog[i].setCurrentValuesToEasyCATBuffer;
+        }
+
+        if (timeLog[i].easyCATApplication > easyCATApplicationMax)
+        {
+            easyCATApplicationMax = timeLog[i].easyCATApplication;
+        }
+
+        if (timeLog[i].loadTargetValuesFromEtherCAT > loadTargetValuesFromEtherCATMax)
+        {
+            loadTargetValuesFromEtherCATMax = timeLog[i].loadTargetValuesFromEtherCAT;
+        }
+
+        if (timeLog[i].motorControl > motorControlMax)
+        {
+            motorControlMax = timeLog[i].motorControl;
+        }
+
+        if (timeLog[i].loadCurrentValuesFromMotorDrivers > loadCurrentValuesFromMotorDriversMax)
+        {
+            loadCurrentValuesFromMotorDriversMax = timeLog[i].loadCurrentValuesFromMotorDrivers;
+        }
+
+        if (timeLog[i].setCurrentValuesToEasyCATBuffer > setCurrentValuesToEasyCATBufferMax)
+        {
+            setCurrentValuesToEasyCATBufferMax = timeLog[i].setCurrentValuesToEasyCATBuffer;
+        }
+
+    }
+    int64_t easyCATApplicationAvg = easyCATApplicationSum / (size);
+    int64_t loadTargetValuesFromEtherCATAvg = loadTargetValuesFromEtherCATSum / size;
+    int64_t motorControlAvg = motorControlSum / size;
+    int64_t loadCurrentValuesFromMotorDriversAvg = loadCurrentValuesFromMotorDriversSum / size;
+    int64_t setCurrentValuesToEasyCATBufferAvg = setCurrentValuesToEasyCATBufferSum / size;
+
+    stats.average.easyCATApplication = easyCATApplicationAvg;
+    stats.average.loadTargetValuesFromEtherCAT = loadTargetValuesFromEtherCATAvg;
+    stats.average.motorControl = motorControlAvg;
+    stats.average.loadCurrentValuesFromMotorDrivers = loadCurrentValuesFromMotorDriversAvg;
+    stats.average.setCurrentValuesToEasyCATBuffer = setCurrentValuesToEasyCATBufferAvg;
+
+    stats.min.easyCATApplication = easyCATApplicationMin;
+    stats.min.loadTargetValuesFromEtherCAT = loadTargetValuesFromEtherCATMin;
+    stats.min.motorControl = motorControlMin;
+    stats.min.loadCurrentValuesFromMotorDrivers = loadCurrentValuesFromMotorDriversMin;
+    stats.min.setCurrentValuesToEasyCATBuffer = setCurrentValuesToEasyCATBufferMin;
+
+    stats.max.easyCATApplication = easyCATApplicationMax;
+    stats.max.loadTargetValuesFromEtherCAT = loadTargetValuesFromEtherCATMax;
+    stats.max.motorControl = motorControlMax;
+    stats.max.loadCurrentValuesFromMotorDrivers = loadCurrentValuesFromMotorDriversMax;
+    stats.max.setCurrentValuesToEasyCATBuffer = setCurrentValuesToEasyCATBufferMax;
+
+    return stats;
 }
 
 
@@ -449,8 +566,15 @@ void canfdHealthCheckTask(void *pvParameters) {
         ESP_LOGI("CANFD", "Handle dispatch count: %u", CAN1.handle_dispatch_count);
         ESP_LOGI("CANFD", "RX Queue count: %u", CAN1.rx_queue_count);
         ESP_LOGI("CANFD", "RX Queue available: %u", CAN1.available());
-        ESP_LOGI("CANFD", "Send count: %u", CAN1.send_count);
+        //ESP_LOGI("CANFD", "Send count: %u", CAN1.send_count);
         ESP_LOGI("CANFD", "EasyCAT count: %u", easycat_count);
+        TimeLogStats stats = calcStats();
+
+        printf("EasyCAT application time: min %lld us, max %lld us, avg %lld us\n", stats.min.easyCATApplication, stats.max.easyCATApplication, stats.average.easyCATApplication);
+        printf("Load target values from EtherCAT time: min %lld us, max %lld us, avg %lld us\n", stats.min.loadTargetValuesFromEtherCAT, stats.max.loadTargetValuesFromEtherCAT, stats.average.loadTargetValuesFromEtherCAT);
+        printf("Motor control time: min %lld us, max %lld us, avg %lld us\n", stats.min.motorControl, stats.max.motorControl, stats.average.motorControl);
+        printf("Load current values from motor drivers time: min %lld us, max %lld us, avg %lld us\n", stats.min.loadCurrentValuesFromMotorDrivers, stats.max.loadCurrentValuesFromMotorDrivers, stats.average.loadCurrentValuesFromMotorDrivers);
+        printf("Set current values to EasyCAT buffer time: min %lld us, max %lld us, avg %lld us\n", stats.min.setCurrentValuesToEasyCATBuffer, stats.max.setCurrentValuesToEasyCATBuffer, stats.average.setCurrentValuesToEasyCATBuffer);
 
         // カウント数をリセット
         canfd_send_count = 0;
@@ -459,8 +583,9 @@ void canfdHealthCheckTask(void *pvParameters) {
         CAN1.int_handler_count = 0;
         CAN1.handle_dispatch_count = 0;
         CAN1.rx_queue_count = 0;
-        CAN1.send_count = 0;
+        //CAN1.send_count = 0;
         easycat_count = 0;
+        timeLogIndex = 0;
 
         // 1秒待機
         vTaskDelay(1000 / portTICK_PERIOD_MS);
@@ -576,45 +701,58 @@ void easyCAT_task(void *pvParameters) {
         ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
         //ESP_LOGI("EasyCAT", "EasyCAT task started");
         timeLog[timeLogIndex].easyCATApplication = measureTime(easyCATApplication);
+        //easyCATApplication();
         //EasyCAT_MainTask();
         // printf("EasyCAT status: %d\n", status);
         timeLog[timeLogIndex].loadTargetValuesFromEtherCAT = measureTime(loadTargetValuesFromEtherCAT);
+        //loadTargetValuesFromEtherCAT();
         //vTaskDelay(1 / portTICK_PERIOD_MS);
         //xTaskNotifyGive(canfdTaskHandle);
         timeLog[timeLogIndex].motorControl = measureTime(motorControl);
+        //motorControl();
 
         timeLog[timeLogIndex].loadCurrentValuesFromMotorDrivers = measureTime(loadCurrentValuesFromMotorDrivers);
+        //loadCurrentValuesFromMotorDrivers();
         timeLog[timeLogIndex].setCurrentValuesToEasyCATBuffer = measureTime(setCurrentValuesToEasyCATBuffer);
+        //setCurrentValuesToEasyCATBuffer();
         //vTaskDelay(1 / portTICK_PERIOD_MS);
-        if (timeLogIndex >= TIME_LOG_BUFFER_SIZE - 1) {
-            timeLogIndex = 0;
+        // if (timeLogIndex >= TIME_LOG_BUFFER_SIZE - 1) {
             // Calculate average time
-            int64_t easyCATApplicationSum = 0;
-            int64_t loadTargetValuesFromEtherCATSum = 0;
-            int64_t motorControlSum = 0;
-            int64_t loadCurrentValuesFromMotorDriversSum = 0;
-            int64_t setCurrentValuesToEasyCATBufferSum = 0;
-            for (int i = 0; i < TIME_LOG_BUFFER_SIZE; i++) {
-                easyCATApplicationSum += timeLog[i].easyCATApplication;
-                loadTargetValuesFromEtherCATSum += timeLog[i].loadTargetValuesFromEtherCAT;
-                motorControlSum += timeLog[i].motorControl;
-                loadCurrentValuesFromMotorDriversSum += timeLog[i].loadCurrentValuesFromMotorDrivers;
-                setCurrentValuesToEasyCATBufferSum += timeLog[i].setCurrentValuesToEasyCATBuffer;
-            }
-            int64_t easyCATApplicationAvg = easyCATApplicationSum / TIME_LOG_BUFFER_SIZE;
-            int64_t loadTargetValuesFromEtherCATAvg = loadTargetValuesFromEtherCATSum / TIME_LOG_BUFFER_SIZE;
-            int64_t motorControlAvg = motorControlSum / TIME_LOG_BUFFER_SIZE;
-            int64_t loadCurrentValuesFromMotorDriversAvg = loadCurrentValuesFromMotorDriversSum / TIME_LOG_BUFFER_SIZE;
-            int64_t setCurrentValuesToEasyCATBufferAvg = setCurrentValuesToEasyCATBufferSum / TIME_LOG_BUFFER_SIZE;
-            printf("EasyCAT application time: %lld us\n", easyCATApplicationAvg);
-            printf("Load target values from EtherCAT time: %lld us\n", loadTargetValuesFromEtherCATAvg);
-            printf("Motor control time: %lld us\n", motorControlAvg);
-            printf("Load current values from motor drivers time: %lld us\n", loadCurrentValuesFromMotorDriversAvg);
-            printf("Set current values to EasyCAT buffer time: %lld us\n", setCurrentValuesToEasyCATBufferAvg);
-            printf("Total time: %lld us\n", easyCATApplicationAvg + loadTargetValuesFromEtherCATAvg + motorControlAvg + loadCurrentValuesFromMotorDriversAvg + setCurrentValuesToEasyCATBufferAvg);
-        } else {
-            timeLogIndex++;
-        }
+            // int64_t easyCATApplicationSum = 0;
+            // int64_t loadTargetValuesFromEtherCATSum = 0;
+            // int64_t motorControlSum = 0;
+            // int64_t loadCurrentValuesFromMotorDriversSum = 0;
+            // int64_t setCurrentValuesToEasyCATBufferSum = 0;
+            // for (int i = 0; i < TIME_LOG_BUFFER_SIZE; i++) {
+            //     easyCATApplicationSum += timeLog[i].easyCATApplication;
+            //     loadTargetValuesFromEtherCATSum += timeLog[i].loadTargetValuesFromEtherCAT;
+            //     motorControlSum += timeLog[i].motorControl;
+            //     loadCurrentValuesFromMotorDriversSum += timeLog[i].loadCurrentValuesFromMotorDrivers;
+            //     setCurrentValuesToEasyCATBufferSum += timeLog[i].setCurrentValuesToEasyCATBuffer;
+            // }
+            // int64_t easyCATApplicationAvg = easyCATApplicationSum / TIME_LOG_BUFFER_SIZE;
+            // int64_t loadTargetValuesFromEtherCATAvg = loadTargetValuesFromEtherCATSum / TIME_LOG_BUFFER_SIZE;
+            // int64_t motorControlAvg = motorControlSum / TIME_LOG_BUFFER_SIZE;
+            // int64_t loadCurrentValuesFromMotorDriversAvg = loadCurrentValuesFromMotorDriversSum / TIME_LOG_BUFFER_SIZE;
+            // int64_t setCurrentValuesToEasyCATBufferAvg = setCurrentValuesToEasyCATBufferSum / TIME_LOG_BUFFER_SIZE;
+            // printf("EasyCAT application time: %lld us\n", easyCATApplicationAvg);
+            // printf("Load target values from EtherCAT time: %lld us\n", loadTargetValuesFromEtherCATAvg);
+            // printf("Motor control time: %lld us\n", motorControlAvg);
+            // printf("Load current values from motor drivers time: %lld us\n", loadCurrentValuesFromMotorDriversAvg);
+            // printf("Set current values to EasyCAT buffer time: %lld us\n", setCurrentValuesToEasyCATBufferAvg);
+            // printf("Total time: %lld us\n", easyCATApplicationAvg + loadTargetValuesFromEtherCATAvg + motorControlAvg + loadCurrentValuesFromMotorDriversAvg + setCurrentValuesToEasyCATBufferAvg);
+            // TimeLogStats stats = calcStats();
+            // timeLogIndex = 0;
+
+            // printf("EasyCAT application time: min %lld us, max %lld us, avg %lld us\n", stats.min.easyCATApplication, stats.max.easyCATApplication, stats.average.easyCATApplication);
+            // printf("Load target values from EtherCAT time: min %lld us, max %lld us, avg %lld us\n", stats.min.loadTargetValuesFromEtherCAT, stats.max.loadTargetValuesFromEtherCAT, stats.average.loadTargetValuesFromEtherCAT);
+            // printf("Motor control time: min %lld us, max %lld us, avg %lld us\n", stats.min.motorControl, stats.max.motorControl, stats.average.motorControl);
+            // printf("Load current values from motor drivers time: min %lld us, max %lld us, avg %lld us\n", stats.min.loadCurrentValuesFromMotorDrivers, stats.max.loadCurrentValuesFromMotorDrivers, stats.average.loadCurrentValuesFromMotorDrivers);
+            // printf("Set current values to EasyCAT buffer time: min %lld us, max %lld us, avg %lld us\n", stats.min.setCurrentValuesToEasyCATBuffer, stats.max.setCurrentValuesToEasyCATBuffer, stats.average.setCurrentValuesToEasyCATBuffer);
+
+        // } else {
+        timeLogIndex++;
+        // }
     }
 }
 
