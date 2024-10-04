@@ -80,9 +80,9 @@ int32_t easycat_index = 0;
 void IRAM_ATTR EasyCAT_IntHandler()
 {
     // 1msごとにINTが発生する
-    // TIMER_INTERVAL_SEC の間隔で呼び出す。
     if (easycat_index >= 1)
     {
+        // 2msごとにEasyCATタスクに通知
 
         BaseType_t xHigherPriorityTaskWoken = pdFALSE;
         vTaskNotifyGiveFromISR(easyCATTaskHandle, &xHigherPriorityTaskWoken);
@@ -450,6 +450,34 @@ void sendControlTicMessage() {
 
 void motorControl()
 {
+    // for (int i = 0; i < MOTOR_DRIVER_COUNT; i++)
+    // {
+    //     //motor_drivers[i].loadCurrentPosition();
+    //     //canfd_send_count++;
+    //     // motor_drivers[i].loadCurrentCurrent();
+    //     // canfd_send_count++;
+    //     // motor_drivers[i].loadCurrentVelocity();
+    //     // canfd_send_count++;
+
+    //     if (CONTROL_MODE == RMTR_SERVO_MODE_POS)
+    //     {
+    //         // Serial.printf("Target position %d: %d\n", i, target_positions[i]);
+    //         motor_drivers[i].setTargetPosition(target_positions[i]);
+    //         canfd_send_count++;
+    //     }
+    //     else if (CONTROL_MODE == RMTR_SERVO_MODE_VEL)
+    //     {
+    //         // Serial.printf("Target velocity %d: %d\n", i, target_velocities[i]);
+    //         motor_drivers[i].setTargetVelocity(target_velocities[i]);
+    //         canfd_send_count++;
+    //     }
+    //     else if (CONTROL_MODE == RMTR_SERVO_MODE_CUR)
+    //     {
+    //         motor_drivers[i].setTargetCurrent(target_torques[i]);
+    //         canfd_send_count++;
+    //         // Serial.printf("Target torque %d: %d\n", i, target_torques[i]);
+    //     }
+    // }
     //std::vector<int32_t> target_values(MOTOR_DRIVER_COUNT);
 
     if (CONTROL_MODE == RMTR_SERVO_MODE_POS)
