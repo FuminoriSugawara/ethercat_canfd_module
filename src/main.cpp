@@ -1,4 +1,7 @@
 //#include <Arduino.h>
+#include <map>
+#include <memory>
+#include <array>
 #include <stdio.h>
 #include <string.h>
 #include "freertos/FreeRTOS.h"
@@ -26,7 +29,8 @@
 
 #define UART_NUM UART_NUM_0
 #define BUF_SIZE (1024)
-#define MOTOR_DRIVER_COUNT 7
+
+//#define MOTOR_DRIVER_COUNT 7
 //#define MOTOR_DRIVER_COUNT 4
 //#define MOTOR_DRIVER_COUNT 1
 //#define CONTROL_MODE RMTR_SERVO_MODE_CUR
@@ -41,12 +45,15 @@ typedef struct {
     int64_t motorControl;
     int64_t loadCurrentValuesFromMotorDrivers;
     int64_t setCurrentValuesToEasyCATBuffer;
+    int64_t loadRxQueue;
+    int64_t total;
 } TimeLog;
 
 typedef struct {
     TimeLog average;
     TimeLog min;
     TimeLog max;
+    uint32_t overflowCount;
 } TimeLogStats;
 
 TimeLog timeLog[TIME_LOG_BUFFER_SIZE];
@@ -65,6 +72,21 @@ volatile uint32_t canfd_send_count = 0;
 volatile uint32_t canfd_receive_count = 0;
 
 volatile uint32_t easycat_count = 0;
+
+volatile uint32_t motor_control_count = 0;
+volatile uint32_t rx_queue_count = 0;
+constexpr std::array<uint8_t, 7> USED_MODULE_IDS = {0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07};
+//constexpr std::array<uint8_t, 6> USED_MODULE_IDS = {0x01, 0x02, 0x03, 0x04, 0x05, 0x06};
+//constexpr std::array<uint8_t, 5> USED_MODULE_IDS = {0x01, 0x02, 0x03, 0x04, 0x05};
+//constexpr std::array<uint8_t, 4> USED_MODULE_IDS = {0x01, 0x02, 0x03, 0x04};
+//constexpr std::array<uint8_t, 3> USED_MODULE_IDS = {0x01, 0x02, 0x03};
+//constexpr std::array<uint8_t, 2> USED_MODULE_IDS = {0x01, 0x02};
+
+std::map<uint8_t, realman_motor_driver::RealmanMotorDriver> motor_drivers_map;
+std::map<uint8_t, uint32_t> canfd_send_counts_map;
+std::map<uint8_t, uint32_t> canfd_receive_counts_map;
+std::map<uint8_t, bool> motor_driver_connection_states_map;
+
 
 // Timer configuration
 #define TIMER_DIVIDER         2  // Hardware timer clock divider
@@ -101,18 +123,20 @@ void IRAM_ATTR EasyCAT_IntHandler()
 
 
 
-CAN_FRAME_FD message;
-realman_motor_driver::RealmanMotorDriver motor_drivers[MOTOR_DRIVER_COUNT] = {
-    realman_motor_driver::RealmanMotorDriver(0x01, std::shared_ptr<MCP2517FD>(&CAN1), DEBUG_MODE, DRY_RUN),
-    realman_motor_driver::RealmanMotorDriver(0x02, std::shared_ptr<MCP2517FD>(&CAN1), DEBUG_MODE, DRY_RUN),
-    realman_motor_driver::RealmanMotorDriver(0x03, std::shared_ptr<MCP2517FD>(&CAN1), DEBUG_MODE, DRY_RUN),
-    realman_motor_driver::RealmanMotorDriver(0x04, std::shared_ptr<MCP2517FD>(&CAN1), DEBUG_MODE, DRY_RUN),
-    realman_motor_driver::RealmanMotorDriver(0x05, std::shared_ptr<MCP2517FD>(&CAN1), DEBUG_MODE, DRY_RUN),
-    realman_motor_driver::RealmanMotorDriver(0x06, std::shared_ptr<MCP2517FD>(&CAN1), DEBUG_MODE, DRY_RUN),
-    realman_motor_driver::RealmanMotorDriver(0x07, std::shared_ptr<MCP2517FD>(&CAN1), DEBUG_MODE, DRY_RUN),
-};
+void initializeMotorDriversMap() {
+    std::shared_ptr<MCP2517FD> can1_ptr = std::make_shared<MCP2517FD>(CAN1);
 
-//ACAN2517FD can(PIN_NUM_CS, SPI, 255);
+    for (uint8_t module_id : USED_MODULE_IDS) {
+        motor_drivers_map.emplace(
+            module_id,
+            realman_motor_driver::RealmanMotorDriver(module_id, can1_ptr, DEBUG_MODE, DRY_RUN)
+        );
+        canfd_send_counts_map.emplace(module_id, 0);
+        canfd_receive_counts_map.emplace(module_id, 0);
+        motor_driver_connection_states_map.emplace(module_id, false);
+    }
+}
+
 
 int32_t actual_positions[8] = {0, 0, 0, 0, 0, 0, 0, 0};
 int32_t actual_velocities[8] = {0, 0, 0, 0, 0, 0, 0, 0};
@@ -131,10 +155,34 @@ public:
         CAN_FRAME_FD rxFrame;
         CAN1.readFD(rxFrame);
         uint8_t module_id = (rxFrame.id & 0x00FF);
-        motor_drivers[module_id - 1].processCANFDMessage(rxFrame);
+        auto it = motor_drivers_map.find(module_id);
+        if (it == motor_drivers_map.end()) {
+            return;
+        }
+        motor_drivers_map.at(module_id).processCANFDMessage(rxFrame);
+        canfd_receive_counts_map[module_id]++;
         canfd_receive_count++;
     }   
 };
+
+void loadRxQueue() {
+    //CAN1.intHandler();
+    rx_queue_count ++;
+    uint32_t rxQueueCount = CAN1.waitingRxQueueCount();
+    for (uint32_t i = 0; i < rxQueueCount; i++) {
+        CAN_FRAME_FD rxFrame;
+        if (CAN1.readFD(rxFrame)) {
+            uint8_t module_id = (rxFrame.id & 0x00FF);
+            auto it = motor_drivers_map.find(module_id);
+            if (it == motor_drivers_map.end()) {
+                return;
+            }
+            motor_drivers_map.at(module_id).processCANFDMessage(rxFrame);
+            canfd_receive_count++;
+            canfd_receive_counts_map[module_id]++;
+        }
+    }
+}
 
 MyCANListener myCanListener;
 
@@ -154,12 +202,16 @@ TimeLogStats calcStats() {
     int64_t motorControlMin = INT64_MAX;
     int64_t loadCurrentValuesFromMotorDriversMin = INT64_MAX;
     int64_t setCurrentValuesToEasyCATBufferMin = INT64_MAX;
+    int64_t loadRxQueueMin = INT64_MAX;
+    int64_t totalMin = INT64_MAX;
 
     int64_t easyCATApplicationMax = 0;
     int64_t loadTargetValuesFromEtherCATMax = 0;
     int64_t motorControlMax = 0;
     int64_t loadCurrentValuesFromMotorDriversMax = 0;
     int64_t setCurrentValuesToEasyCATBufferMax = 0;
+    int64_t loadRxQueueMax = 0;
+    int64_t totalMax = 0;
 
 
     int64_t easyCATApplicationSum = 0;
@@ -167,6 +219,11 @@ TimeLogStats calcStats() {
     int64_t motorControlSum = 0;
     int64_t loadCurrentValuesFromMotorDriversSum = 0;
     int64_t setCurrentValuesToEasyCATBufferSum = 0;
+    int64_t loadRxQueueSum = 0;
+    int64_t totalSum = 0;
+
+    int32_t overflowCount = 0;
+
     if (timeLogIndex == 0)
     {
         return stats;
@@ -174,11 +231,20 @@ TimeLogStats calcStats() {
     int32_t size = ((timeLogIndex + 1)< TIME_LOG_BUFFER_SIZE) ? (timeLogIndex + 1) : TIME_LOG_BUFFER_SIZE;
     for (int i = 0; i < size; i++)
     {
+        timeLog[i].total = timeLog[i].easyCATApplication + timeLog[i].loadTargetValuesFromEtherCAT + timeLog[i].motorControl + timeLog[i].loadCurrentValuesFromMotorDrivers + timeLog[i].setCurrentValuesToEasyCATBuffer + timeLog[i].loadRxQueue;
+        if (timeLog[i].total > 2000)
+        {
+            overflowCount++;
+        }
+
         easyCATApplicationSum += timeLog[i].easyCATApplication;
         loadTargetValuesFromEtherCATSum += timeLog[i].loadTargetValuesFromEtherCAT;
         motorControlSum += timeLog[i].motorControl;
         loadCurrentValuesFromMotorDriversSum += timeLog[i].loadCurrentValuesFromMotorDrivers;
         setCurrentValuesToEasyCATBufferSum += timeLog[i].setCurrentValuesToEasyCATBuffer;
+        loadRxQueueSum += timeLog[i].loadRxQueue;
+        totalSum += timeLog[i].total;
+
 
         if (timeLog[i].easyCATApplication < easyCATApplicationMin)
         {
@@ -202,6 +268,16 @@ TimeLogStats calcStats() {
         if (timeLog[i].setCurrentValuesToEasyCATBuffer < setCurrentValuesToEasyCATBufferMin)
         {
             setCurrentValuesToEasyCATBufferMin = timeLog[i].setCurrentValuesToEasyCATBuffer;
+        }
+
+        if (timeLog[i].loadRxQueue < loadRxQueueMin)
+        {
+            loadRxQueueMin = timeLog[i].loadRxQueue;
+        }
+
+        if (timeLog[i].total < totalMin)
+        {
+            totalMin = timeLog[i].total;
         }
 
         if (timeLog[i].easyCATApplication > easyCATApplicationMax)
@@ -229,30 +305,50 @@ TimeLogStats calcStats() {
             setCurrentValuesToEasyCATBufferMax = timeLog[i].setCurrentValuesToEasyCATBuffer;
         }
 
+        if (timeLog[i].loadRxQueue > loadRxQueueMax)
+        {
+            loadRxQueueMax = timeLog[i].loadRxQueue;
+        }
+
+        if (timeLog[i].total > totalMax)
+        {
+            totalMax = timeLog[i].total;
+        }
+
     }
     int64_t easyCATApplicationAvg = easyCATApplicationSum / (size);
     int64_t loadTargetValuesFromEtherCATAvg = loadTargetValuesFromEtherCATSum / size;
     int64_t motorControlAvg = motorControlSum / size;
     int64_t loadCurrentValuesFromMotorDriversAvg = loadCurrentValuesFromMotorDriversSum / size;
     int64_t setCurrentValuesToEasyCATBufferAvg = setCurrentValuesToEasyCATBufferSum / size;
+    int64_t loadRxQueueAvg = loadRxQueueSum / size;
+    int64_t totalAvg = totalSum / size;
 
     stats.average.easyCATApplication = easyCATApplicationAvg;
     stats.average.loadTargetValuesFromEtherCAT = loadTargetValuesFromEtherCATAvg;
     stats.average.motorControl = motorControlAvg;
     stats.average.loadCurrentValuesFromMotorDrivers = loadCurrentValuesFromMotorDriversAvg;
     stats.average.setCurrentValuesToEasyCATBuffer = setCurrentValuesToEasyCATBufferAvg;
+    stats.average.loadRxQueue = loadRxQueueAvg;
+    stats.average.total = totalAvg;
 
     stats.min.easyCATApplication = easyCATApplicationMin;
     stats.min.loadTargetValuesFromEtherCAT = loadTargetValuesFromEtherCATMin;
     stats.min.motorControl = motorControlMin;
     stats.min.loadCurrentValuesFromMotorDrivers = loadCurrentValuesFromMotorDriversMin;
     stats.min.setCurrentValuesToEasyCATBuffer = setCurrentValuesToEasyCATBufferMin;
+    stats.min.loadRxQueue = loadRxQueueMin;
+    stats.min.total = totalMin;
 
     stats.max.easyCATApplication = easyCATApplicationMax;
     stats.max.loadTargetValuesFromEtherCAT = loadTargetValuesFromEtherCATMax;
     stats.max.motorControl = motorControlMax;
     stats.max.loadCurrentValuesFromMotorDrivers = loadCurrentValuesFromMotorDriversMax;
     stats.max.setCurrentValuesToEasyCATBuffer = setCurrentValuesToEasyCATBufferMax;
+    stats.max.loadRxQueue = loadRxQueueMax;
+    stats.max.total = totalMax;
+
+    stats.overflowCount = overflowCount;
 
     return stats;
 }
@@ -276,29 +372,28 @@ bool easyCATSetup()
 bool motorDriverSetup()
 {
         vTaskDelay(100 / portTICK_PERIOD_MS);
-        bool motor_driver_connection_states[MOTOR_DRIVER_COUNT]; 
         bool all_drivers_connected = false;
         uint8_t retry_count = 5;
         while (!all_drivers_connected)
         {
             uint8_t connected_count = 0;
-            for (int i = 0; i < MOTOR_DRIVER_COUNT; i++)
+            for (uint8_t module_id : USED_MODULE_IDS)
             {
                 // verify all motor drivers are connected
-                bool connection_state = motor_drivers[i].getConnectionState();
-                motor_driver_connection_states[i] = connection_state;
+                bool connection_state = motor_drivers_map.at(module_id).getConnectionState();
+                motor_driver_connection_states_map[module_id] = connection_state;
                 if (connection_state) {
-                    Serial.printf("Motor driver %d connected\n", i+1);
+                    Serial.printf("Motor driver %d connected\n", module_id);
                     connected_count++;
                     continue;
                 } else 
                 {
                     vTaskDelay(100 / portTICK_PERIOD_MS);
-                    motor_drivers[i].setConnectionOnline();
+                    motor_drivers_map.at(module_id).setConnectionOnline();
                     vTaskDelay(1000 / portTICK_PERIOD_MS);
                 }
             }
-            if (connected_count == MOTOR_DRIVER_COUNT)
+            if (connected_count == USED_MODULE_IDS.size())
             {
                 Serial.println("All motor drivers connected");
                 all_drivers_connected = true;
@@ -308,9 +403,9 @@ bool motorDriverSetup()
             if (retry_count == 0)
             {
                 Serial.println("Motor driver connection failed");
-                for (int i = 0; i < MOTOR_DRIVER_COUNT; i++)
+                for (uint8_t module_id : USED_MODULE_IDS)
                 {
-                    Serial.printf("Motor driver connection state: %d\n", motor_driver_connection_states[i]);
+                    Serial.printf("Motor driver connection state: %d\n", motor_driver_connection_states_map[module_id]);
                 }
                 while (1)
                 {
@@ -324,17 +419,17 @@ bool motorDriverSetup()
 
         vTaskDelay(200 / portTICK_PERIOD_MS);
         // check driver error
-        for (int i = 0; i < MOTOR_DRIVER_COUNT; i++)
+        for (uint8_t module_id : USED_MODULE_IDS)
         {
-            motor_drivers[i].loadCurrentState();
+            motor_drivers_map.at(module_id).loadCurrentState();
         }
         vTaskDelay(200 / portTICK_PERIOD_MS);
         ESP_LOGI("MotorDriver", "Checking driver error");
         bool all_drivers_error_free = true;
-        for (int i = 0; i < MOTOR_DRIVER_COUNT; i++)
+        for (uint8_t module_id : USED_MODULE_IDS)
         {
-            uint16_t error_state = motor_drivers[i].getErrorState();
-            Serial.printf("Error state %d: 0x%04X\n", i, error_state);
+            uint16_t error_state = motor_drivers_map.at(module_id).getErrorState();
+            ESP_LOGE("MotorDriver","Error state %d: 0x%04X", module_id, error_state);
             if (error_state != 0)
             {
                 all_drivers_error_free = false;
@@ -342,32 +437,27 @@ bool motorDriverSetup()
         }
         if (!all_drivers_error_free)
         {
-            Serial.println("Motor driver error detected");
-            Serial.println("Resetting motor drivers");
-            for (int i = 0; i < MOTOR_DRIVER_COUNT; i++)
+            ESP_LOGE("MotorDriver","Motor driver error detected");
+            ESP_LOGE("MotorDriver","Resetting motor drivers");
+            for (uint8_t module_id : USED_MODULE_IDS)
             {
-                if (motor_drivers[i].getErrorState() != 0)
-                {
-                    motor_drivers[i].setDriverDisabled();
-                    vTaskDelay(100 / portTICK_PERIOD_MS);
-                    motor_drivers[i].setZeroPosition();
-                    vTaskDelay(100 / portTICK_PERIOD_MS);
-                    motor_drivers[i].clearJointError();
-                    vTaskDelay(100 / portTICK_PERIOD_MS);
-                    motor_drivers[i].setDriverEnabled();
-                    vTaskDelay(100 / portTICK_PERIOD_MS);
-                }
+                motor_drivers_map.at(module_id).setDriverDisabled();
+                vTaskDelay(100 / portTICK_PERIOD_MS);
+                motor_drivers_map.at(module_id).clearJointError();
+                vTaskDelay(100 / portTICK_PERIOD_MS);
+                motor_drivers_map.at(module_id).setDriverEnabled();
+                vTaskDelay(100 / portTICK_PERIOD_MS);
             }
             // check driver error
-            for (int i = 0; i < MOTOR_DRIVER_COUNT; i++)
+            for (uint8_t module_id : USED_MODULE_IDS)
             {
-                motor_drivers[i].loadCurrentState();
+                motor_drivers_map.at(module_id).loadCurrentState();
             }
             vTaskDelay(200 / portTICK_PERIOD_MS);
-            for (int i = 0; i < MOTOR_DRIVER_COUNT; i++)
+            for (uint8_t module_id : USED_MODULE_IDS)
             {
-                uint16_t error_state = motor_drivers[i].getErrorState();
-                Serial.printf("Error state %d: 0x%04X\n", i, error_state);
+                uint16_t error_state = motor_drivers_map.at(module_id).getErrorState();
+                ESP_LOGI("MotorDriver","Error state %d: 0x%04X\n", module_id, error_state);
             }
             while (1)
             {
@@ -377,22 +467,22 @@ bool motorDriverSetup()
 
         ESP_LOGI("MotorDriver", "Setting control mode");
 
-        for (int i = 0; i < MOTOR_DRIVER_COUNT; i++)
+        for (uint8_t module_id : USED_MODULE_IDS)
         {
             if (CONTROL_MODE == RMTR_SERVO_MODE_POS)
             {
                 // Switch to position control mode
-                motor_drivers[i].setPositionControlMode();
+                motor_drivers_map.at(module_id).setPositionControlMode();
             }
             else if (CONTROL_MODE == RMTR_SERVO_MODE_VEL)
             {
                 // Switch to velocity control mode
-                motor_drivers[i].setVelocityControlMode();
+                motor_drivers_map.at(module_id).setVelocityControlMode();
             }
             else if (CONTROL_MODE == RMTR_SERVO_MODE_CUR)
             {
                 // Switch to current control mode
-                motor_drivers[i].setCurrentControlMode();
+                motor_drivers_map.at(module_id).setCurrentControlMode();
             }
             vTaskDelay(100 / portTICK_PERIOD_MS);
             //motor_drivers[i].setDriverEnabled();
@@ -450,73 +540,29 @@ void sendControlTicMessage() {
 
 void motorControl()
 {
-    // for (int i = 0; i < MOTOR_DRIVER_COUNT; i++)
-    // {
-    //     //motor_drivers[i].loadCurrentPosition();
-    //     //canfd_send_count++;
-    //     // motor_drivers[i].loadCurrentCurrent();
-    //     // canfd_send_count++;
-    //     // motor_drivers[i].loadCurrentVelocity();
-    //     // canfd_send_count++;
-
-    //     if (CONTROL_MODE == RMTR_SERVO_MODE_POS)
-    //     {
-    //         // Serial.printf("Target position %d: %d\n", i, target_positions[i]);
-    //         motor_drivers[i].setTargetPosition(target_positions[i]);
-    //         canfd_send_count++;
-    //     }
-    //     else if (CONTROL_MODE == RMTR_SERVO_MODE_VEL)
-    //     {
-    //         // Serial.printf("Target velocity %d: %d\n", i, target_velocities[i]);
-    //         motor_drivers[i].setTargetVelocity(target_velocities[i]);
-    //         canfd_send_count++;
-    //     }
-    //     else if (CONTROL_MODE == RMTR_SERVO_MODE_CUR)
-    //     {
-    //         motor_drivers[i].setTargetCurrent(target_torques[i]);
-    //         canfd_send_count++;
-    //         // Serial.printf("Target torque %d: %d\n", i, target_torques[i]);
-    //     }
-    // }
-    //std::vector<int32_t> target_values(MOTOR_DRIVER_COUNT);
-
-    if (CONTROL_MODE == RMTR_SERVO_MODE_POS)
+    motor_control_count++;
+    for (uint8_t module_id : USED_MODULE_IDS)
     {
-        std::vector<std::pair<uint16_t, CAN_FRAME_FD>> messages;
-        messages.reserve(MOTOR_DRIVER_COUNT);
-
-        for (size_t i = 0; i < MOTOR_DRIVER_COUNT; ++i) {
-            CAN_FRAME_FD frame;
-            frame.id = (i + 1) | MESSAGE_TYPE_CMD_POS;
-            frame.fdMode = 1;
-            frame.rrs = 0;
-            frame.length = 4;
-
-            uint32_t target_position_int = static_cast<uint32_t>(target_positions[i]);
-            frame.data.uint8[0] = (target_position_int & 0x000000FF);
-            frame.data.uint8[1] = (target_position_int & 0x0000FF00) >> 8;
-            frame.data.uint8[2] = (target_position_int & 0x00FF0000) >> 16;
-            frame.data.uint8[3] = (target_position_int & 0xFF000000) >> 24;
-
-            messages.emplace_back(frame.id, frame);
+        if (CONTROL_MODE == RMTR_SERVO_MODE_POS)
+        {
+            // Serial.printf("Target position %d: %d\n", i, target_positions[i]);
+            motor_drivers_map.at(module_id).setTargetPosition(target_positions[module_id]);
+            canfd_send_count++;
+            canfd_send_counts_map[module_id]++;
         }
-        CAN1.WriteMultipleFrameBuffers(messages);
-        //std::copy(target_positions, target_positions + MOTOR_DRIVER_COUNT, target_values.begin());
-        //realman_motor_driver::RealmanMotorDriver::sendMultipleTargetPositions(target_values);
-        canfd_send_count += MOTOR_DRIVER_COUNT;
+        else if (CONTROL_MODE == RMTR_SERVO_MODE_VEL)
+        {
+            // Serial.printf("Target velocity %d: %d\n", i, target_velocities[i]);
+            motor_drivers_map.at(module_id).setTargetVelocity(target_velocities[module_id]);
+            canfd_send_count++;
+            canfd_send_counts_map[module_id]++;
+        }
+        else if (CONTROL_MODE == RMTR_SERVO_MODE_CUR)
+        {
+            canfd_send_counts_map[module_id]++;
+            // Serial.printf("Target torque %d: %d\n", i, target_torques[i]);
+        }
     }
-    //else if (CONTROL_MODE == RMTR_SERVO_MODE_VEL)
-    //{
-    //    std::copy(target_velocities, target_velocities + MOTOR_DRIVER_COUNT, target_values.begin());
-    //    realman_motor_driver::RealmanMotorDriver::sendMultipleTargetVelocities(target_values);
-    //    canfd_send_count += MOTOR_DRIVER_COUNT;
-    //}
-    //else if (CONTROL_MODE == RMTR_SERVO_MODE_CUR)
-    //{
-    //    std::copy(target_torques, target_torques + MOTOR_DRIVER_COUNT, target_values.begin());
-    //    realman_motor_driver::RealmanMotorDriver::sendMultipleTargetCurrents(target_values);
-    //    canfd_send_count += MOTOR_DRIVER_COUNT;
-    //}
 
     sendControlTicMessage();
     
@@ -581,39 +627,63 @@ void sendEtherCATDataAsCANFD(const PROCBUFFER_OUT& ethercat_data, uint32_t canId
 void canfdHealthCheckTask(void *pvParameters) {
     // 送信カウント数と受信カウント数を1秒ごとに比較
     while (1) {
-        // カウント数を比較
-        if (canfd_send_count != canfd_receive_count) {
-            // エラー処理
-            ESP_LOGE("CANFD", "Send count: %u, Receive count: %u", canfd_send_count, canfd_receive_count);
-        } else {
-            // 正常
-            ESP_LOGI("CANFD", "Send count: %u, Receive count: %u", canfd_send_count, canfd_receive_count);
+        ESP_LOGI("main", "EasyCAT count: %u", easycat_count);
+        ESP_LOGI("main", "Motor control count: %u", motor_control_count);
+        ESP_LOGI("main", "Send count: %u, Receive count: %u", canfd_send_count, canfd_receive_count);
+        for (uint8_t module_id : USED_MODULE_IDS) {
+            ESP_LOGI("main", "module_id: %d, Send count: %u, Receive count: %u", module_id, canfd_send_counts_map.at(module_id), canfd_receive_counts_map.at(module_id));
         }
+        ESP_LOGI("main", "RX Queue count: %u", rx_queue_count);
+        ESP_LOGI("CANFD", "int_pin_count: %u", CAN1.int_pin_count);
         ESP_LOGI("CANFD", "task_MCPIntFD count: %u", CAN1.task_MCPIntFD_count);
         ESP_LOGI("CANFD", "INT Handler count: %u", CAN1.int_handler_count);
         ESP_LOGI("CANFD", "Handle dispatch count: %u", CAN1.handle_dispatch_count);
         ESP_LOGI("CANFD", "RX Queue count: %u", CAN1.rx_queue_count);
         ESP_LOGI("CANFD", "RX Queue available: %u", CAN1.available());
-        //ESP_LOGI("CANFD", "Send count: %u", CAN1.send_count);
-        ESP_LOGI("CANFD", "EasyCAT count: %u", easycat_count);
-        TimeLogStats stats = calcStats();
+        ESP_LOGI("CANFD", "Send count: %u", CAN1.send_count);
+        ESP_LOGE("CANFD", "Receive error count: %u", CAN1.receiveErrorCount);
+        ESP_LOGE("CANFD", "Transmit error count: %u", CAN1.transmitErrorCount);
+        ESP_LOGE("CANFD", "ErrorRegister: 0x%08X", CAN1.transmitRecceiveErrorCountResister);
+        ESP_LOGI("CANFD", "Interrupt code: 0x%08X", CAN1.interruptCode);
+        ESP_LOGI("CANFD", "Fifo status: 0x%08X", CAN1.fifoStatus);
+        ESP_LOGI("CANFD", "Receive overflow interrupt status: 0x%08X", CAN1.receiveOverflowInterruptStatus);
+        ESP_LOGE("CANFD", "CRC 0x%08X", CAN1.crc);
+        ESP_LOGI("CANFD", "Int flag log index: %u\n", CAN1.intFlagLogIndex);
+        for (int i = 0; i < CAN1.intFlagLogIndex; i++)
+        {
+            ESP_LOGI("CANFD","0x%08X", CAN1.intFlagLog[i]);
+            ESP_LOGI("CANFD","CiCON 0x%08X", CAN1.ciConLog[i]);
+        }
 
-        printf("EasyCAT application time: min %lld us, max %lld us, avg %lld us\n", stats.min.easyCATApplication, stats.max.easyCATApplication, stats.average.easyCATApplication);
-        printf("Load target values from EtherCAT time: min %lld us, max %lld us, avg %lld us\n", stats.min.loadTargetValuesFromEtherCAT, stats.max.loadTargetValuesFromEtherCAT, stats.average.loadTargetValuesFromEtherCAT);
-        printf("Motor control time: min %lld us, max %lld us, avg %lld us\n", stats.min.motorControl, stats.max.motorControl, stats.average.motorControl);
-        printf("Load current values from motor drivers time: min %lld us, max %lld us, avg %lld us\n", stats.min.loadCurrentValuesFromMotorDrivers, stats.max.loadCurrentValuesFromMotorDrivers, stats.average.loadCurrentValuesFromMotorDrivers);
-        printf("Set current values to EasyCAT buffer time: min %lld us, max %lld us, avg %lld us\n", stats.min.setCurrentValuesToEasyCATBuffer, stats.max.setCurrentValuesToEasyCATBuffer, stats.average.setCurrentValuesToEasyCATBuffer);
+        TimeLogStats stats = calcStats();
+        ESP_LOGI("Stats", "EasyCAT application time: min %lld us, max %lld us, avg %lld us", stats.min.easyCATApplication, stats.max.easyCATApplication, stats.average.easyCATApplication);
+        ESP_LOGI("Stats", "Load target values from EtherCAT time: min %lld us, max %lld us, avg %lld us", stats.min.loadTargetValuesFromEtherCAT, stats.max.loadTargetValuesFromEtherCAT, stats.average.loadTargetValuesFromEtherCAT);
+        ESP_LOGI("Stats", "Motor control time: min %lld us, max %lld us, avg %lld us", stats.min.motorControl, stats.max.motorControl, stats.average.motorControl);
+        ESP_LOGI("Stats", "Load current values from motor drivers time: min %lld us, max %lld us, avg %lld us", stats.min.loadCurrentValuesFromMotorDrivers, stats.max.loadCurrentValuesFromMotorDrivers, stats.average.loadCurrentValuesFromMotorDrivers);
+        ESP_LOGI("Stats", "Set current values to EasyCAT buffer time: min %lld us, max %lld us, avg %lld us", stats.min.setCurrentValuesToEasyCATBuffer, stats.max.setCurrentValuesToEasyCATBuffer, stats.average.setCurrentValuesToEasyCATBuffer);
+        ESP_LOGI("Stats", "Load RX queue time: min %lld us, max %lld us, avg %lld us", stats.min.loadRxQueue, stats.max.loadRxQueue, stats.average.loadRxQueue);
+        ESP_LOGI("Stats", "Total time: min %lld us, max %lld us, avg %lld us", stats.min.total, stats.max.total, stats.average.total);
+        ESP_LOGI("Stats", "Overflow count: %u", stats.overflowCount);
 
         // カウント数をリセット
+        motor_control_count = 0;
         canfd_send_count = 0;
+        for (uint8_t module_id : USED_MODULE_IDS) {
+            canfd_send_counts_map[module_id] = 0;
+            canfd_receive_counts_map[module_id] = 0;
+        }
         canfd_receive_count = 0;
+        rx_queue_count = 0;
+        easycat_count = 0;
+        timeLogIndex = 0;
+
         CAN1.task_MCPIntFD_count = 0;
         CAN1.int_handler_count = 0;
         CAN1.handle_dispatch_count = 0;
         CAN1.rx_queue_count = 0;
-        //CAN1.send_count = 0;
-        easycat_count = 0;
-        timeLogIndex = 0;
+        CAN1.intFlagLogIndex = 0;
+        CAN1.send_count = 0;
+        CAN1.int_pin_count = 0;
 
         // 1秒待機
         vTaskDelay(1000 / portTICK_PERIOD_MS);
@@ -624,7 +694,6 @@ void canfdHealthCheckTask(void *pvParameters) {
 
 
 void loadTargetValuesFromEtherCAT() {
-    easycat_count++;
     // update target position
     target_positions[0] = EasyCAT_BufferOut.Cust.Position_1;
     target_positions[1] = EasyCAT_BufferOut.Cust.Position_2;
@@ -665,11 +734,10 @@ void loadTargetValuesFromEtherCAT() {
 
 // load current values from motor drivers
 void loadCurrentValuesFromMotorDrivers() {
-    for (int i = 0; i < MOTOR_DRIVER_COUNT; i++)
-    {
-        actual_positions[i] = (int32_t)(motor_drivers[i].getCurrentPosition());
-        actual_torques[i] = (int32_t)(motor_drivers[i].getCurrentTorque());
-        actual_velocities[i] = (int32_t)(motor_drivers[i].getCurrentVelocity());
+    for (uint8_t module_id : USED_MODULE_IDS) {
+        actual_positions[module_id] = (int32_t)(motor_drivers_map.at(module_id).getCurrentPosition());
+        actual_torques[module_id] = (int32_t)(motor_drivers_map.at(module_id).getCurrentTorque());
+        actual_velocities[module_id] = (int32_t)(motor_drivers_map.at(module_id).getCurrentVelocity());
     }
 }
 
@@ -725,6 +793,7 @@ void easyCATApplication ()
 void easyCAT_task(void *pvParameters) {
     
     while (1) {
+        easycat_count++;
         // Wait for notification from ISR
         ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
         //ESP_LOGI("EasyCAT", "EasyCAT task started");
@@ -737,6 +806,9 @@ void easyCAT_task(void *pvParameters) {
         //vTaskDelay(1 / portTICK_PERIOD_MS);
         //xTaskNotifyGive(canfdTaskHandle);
         timeLog[timeLogIndex].motorControl = measureTime(motorControl);
+        //CAN1.intHandler();
+        timeLog[timeLogIndex].loadRxQueue = measureTime(loadRxQueue);
+        //loadRxQueue();
         //motorControl();
 
         timeLog[timeLogIndex].loadCurrentValuesFromMotorDrivers = measureTime(loadCurrentValuesFromMotorDrivers);
@@ -831,6 +903,7 @@ void init_timer() {
 
 extern "C" void app_main(void)
 {
+    initializeMotorDriversMap();
 
     //esp_task_wdt_init(5, true);
 
