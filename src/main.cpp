@@ -320,57 +320,57 @@ TimeLogStats calcStats() {
         //{
         //    easyCATApplicationMin = timeLog[i].easyCATApplication;
         //}
-        if (timeLog[i].easyCATRead < easyCATReadMin)
+        if (timeLog[i].easyCATRead > 0 && timeLog[i].easyCATRead < easyCATReadMin)
         {
             easyCATReadMin = timeLog[i].easyCATRead;
         }
 
-        if (timeLog[i].easyCATWrite < easyCATWriteMin)
+        if (timeLog[i].easyCATWrite > 0 && timeLog[i].easyCATWrite < easyCATWriteMin)
         {
             easyCATWriteMin = timeLog[i].easyCATWrite;
         }
 
-        if (timeLog[i].loadTargetValuesFromEtherCAT < loadTargetValuesFromEtherCATMin)
+        if (timeLog[i].loadTargetValuesFromEtherCAT > 0 && timeLog[i].loadTargetValuesFromEtherCAT < loadTargetValuesFromEtherCATMin)
         {
             loadTargetValuesFromEtherCATMin = timeLog[i].loadTargetValuesFromEtherCAT;
         }
 
-        if (timeLog[i].motorControl < motorControlMin)
+        if (timeLog[i].motorControl > 0 && timeLog[i].motorControl < motorControlMin)
         {
             motorControlMin = timeLog[i].motorControl;
         }
 
-        if (timeLog[i].loadCurrentValuesFromMotorDrivers < loadCurrentValuesFromMotorDriversMin)
+        if (timeLog[i].loadCurrentValuesFromMotorDrivers > 0 && timeLog[i].loadCurrentValuesFromMotorDrivers < loadCurrentValuesFromMotorDriversMin)
         {
             loadCurrentValuesFromMotorDriversMin = timeLog[i].loadCurrentValuesFromMotorDrivers;
         }
 
-        if (timeLog[i].setCurrentValuesToEasyCATBuffer < setCurrentValuesToEasyCATBufferMin)
+        if (timeLog[i].setCurrentValuesToEasyCATBuffer > 0 && timeLog[i].setCurrentValuesToEasyCATBuffer < setCurrentValuesToEasyCATBufferMin)
         {
             setCurrentValuesToEasyCATBufferMin = timeLog[i].setCurrentValuesToEasyCATBuffer;
         }
 
-        if (timeLog[i].loadRxQueue < loadRxQueueMin)
+        if (timeLog[i].loadRxQueue > 0 && timeLog[i].loadRxQueue < loadRxQueueMin)
         {
             loadRxQueueMin = timeLog[i].loadRxQueue;
         }
 
-        if (timeLog[i].easyCATReadTaskTotal < easyCatReadTaskTotalMin)
+        if (timeLog[i].easyCATReadTaskTotal > 0 && timeLog[i].easyCATReadTaskTotal < easyCatReadTaskTotalMin)
         {
             easyCatReadTaskTotalMin = timeLog[i].easyCATReadTaskTotal;
         }
 
-        if (timeLog[i].easyCATWriteTaskTotal < easyCatWriteTaskTotalMin)
+        if (timeLog[i].easyCATWriteTaskTotal > 0 && timeLog[i].easyCATWriteTaskTotal < easyCatWriteTaskTotalMin)
         {
             easyCatWriteTaskTotalMin = timeLog[i].easyCATWriteTaskTotal;
         }
 
-        if (timeLog[i].canfdReadTaskTotal < canfdReadTaskTotalMin)
+        if (timeLog[i].canfdReadTaskTotal > 0 && timeLog[i].canfdReadTaskTotal < canfdReadTaskTotalMin)
         {
             canfdReadTaskTotalMin = timeLog[i].canfdReadTaskTotal;
         }
 
-        if (timeLog[i].canfdWriteTaskTotal < canfdWriteTaskTotalMin)
+        if (timeLog[i].canfdWriteTaskTotal > 0 && timeLog[i].canfdWriteTaskTotal < canfdWriteTaskTotalMin)
         {
             canfdWriteTaskTotalMin = timeLog[i].canfdWriteTaskTotal;
         }
