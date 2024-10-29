@@ -307,23 +307,21 @@ void RealmanMotorDriver::setTargetVelocity(int32_t target_velocity)
     //}
     BytesUnion_FD data;
     int32_t target_velocity_int = (int32_t) (target_velocity);
-    data.uint8[0] = 0x02;
-    data.uint8[1] = 0x34;
-    data.uint8[2] = (target_velocity_int & 0x000000FF);
-    data.uint8[3] = (target_velocity_int & 0x0000FF00) >> 8;
-    data.uint8[4] = (target_velocity_int & 0x00FF0000) >> 16;
-    data.uint8[5] = (target_velocity_int & 0xFF000000) >> 24;
-    Serial.println("Target Velocity");
-    for (int i = 0; i < 6; i++)
-    {
-        Serial.printf("0x%02X ", data.uint8[i]);
-    }
+    data.uint8[0] = (target_velocity_int & 0x000000FF);
+    data.uint8[1] = (target_velocity_int & 0x0000FF00) >> 8;
+    data.uint8[2] = (target_velocity_int & 0x00FF0000) >> 16;
+    data.uint8[3] = (target_velocity_int & 0xFF000000) >> 24;
+    //Serial.println("Target Velocity");
+    //for (int i = 0; i < 6; i++)
+    //{
+    //    Serial.printf("0x%02X ", data.uint8[i]);
+    //}
     if (this->DRY_RUN)
     {
         this->transmitDummyMessage(MESSAGE_TYPE_CMD_COMMON, data, 6);
         return;
     }
-    this->transmitMessage(MESSAGE_TYPE_CMD_COMMON, data, 6);
+    this->transmitMessage(MESSAGE_TYPE_CMD_VEL, data, 4);
 }
 
 void RealmanMotorDriver::setTargetCurrent(int32_t target_current)
@@ -332,22 +330,20 @@ void RealmanMotorDriver::setTargetCurrent(int32_t target_current)
     BytesUnion_FD data;
     int32_t target_current_int = (int32_t) (target_current);
     // For safety, limit the current to 1000
-    if (target_current_int > 2000)
+    if (target_current_int > 1000)
     {
-        target_current_int = 2000;
+        target_current_int = 1000;
     }
-    data.uint8[0] = 0x02;
-    data.uint8[1] = 0x32;
-    data.uint8[2] = (target_current_int & 0x000000FF);
-    data.uint8[3] = (target_current_int & 0x0000FF00) >> 8;
-    data.uint8[4] = (target_current_int & 0x00FF0000) >> 16;
-    data.uint8[5] = (target_current_int & 0xFF000000) >> 24;
+    data.uint8[0] = (target_current_int & 0x000000FF);
+    data.uint8[1] = (target_current_int & 0x0000FF00) >> 8;
+    data.uint8[2] = (target_current_int & 0x00FF0000) >> 16;
+    data.uint8[3] = (target_current_int & 0xFF000000) >> 24;
     if (this->DRY_RUN)
     {
         this->transmitDummyMessage(MESSAGE_TYPE_CMD_COMMON, data, 6);
         return;
     }
-    this->transmitMessage(MESSAGE_TYPE_CMD_COMMON, data, 6);
+    this->transmitMessage(MESSAGE_TYPE_CMD_CUR, data, 4);
 }
 
 void RealmanMotorDriver::setZeroPosition(void)
