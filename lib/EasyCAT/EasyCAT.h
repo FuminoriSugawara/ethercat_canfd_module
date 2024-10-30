@@ -287,6 +287,8 @@ extern PROCBUFFER_IN EasyCAT_BufferIn;                 // input process data buf
 bool EasyCAT_Init(unsigned char SPI_CHIP_SELECT, SyncMode Sync);                            
 unsigned char EasyCAT_MainTask();                      // EtherCAT main task
                                                        // must be called cyclically by the application 
+unsigned char EasyCAT_ReadTask();
+unsigned char EasyCAT_WriteTask();
 
 //---------------------------------------------------------------------------------------- 
 

@@ -2,7 +2,7 @@
 #include "RealmanMotorDriver.hpp"
 using namespace realman_motor_driver;
 
-RealmanMotorDriver::RealmanMotorDriver(uint8_t module_id, std::shared_ptr<CAN_COMMON> can_handler, boolean debug_mode, boolean dry_run) {
+RealmanMotorDriver::RealmanMotorDriver(uint8_t module_id, std::shared_ptr<MCP2517FD> can_handler, boolean debug_mode, boolean dry_run) {
     this->can_handler = can_handler;
     this->module_id = module_id;
     this->IS_DEBUG = debug_mode;
@@ -209,11 +209,11 @@ void RealmanMotorDriver::processServoMessage(CAN_FRAME_FD &message)
     if (message.length != 16) {
         return;
     }
-    float current_current = (float)(bytesToInt32(&message.data.uint8[0]));
-    float current_velocity = (float) (bytesToInt32(&message.data.uint8[4])) / 50;
-    float current_position = (float) (bytesToInt32(&message.data.uint8[8])) / 10000.0;
-    uint16_t enable_state = bytesToUint16(&message.data.uint8[12]);
-    uint16_t error_state = bytesToUint16(&message.data.uint8[14]);
+    this->current_torque = bytesToInt32(&message.data.uint8[0]);
+    this->current_velocity = bytesToInt32(&message.data.uint8[4]);
+    this->current_position = bytesToInt32(&message.data.uint8[8]);
+    this->error_state = bytesToUint16(&message.data.uint8[14]);
+    //uint16_t enable_state = bytesToUint16(&message.data.uint8[12]);
     //Serial.printf("Current Current: %f\n", current_current);
     //Serial.printf("Current Velocity: %f\n", current_velocity);
     //Serial.printf("Current Position: %f\n", current_position);
@@ -307,23 +307,21 @@ void RealmanMotorDriver::setTargetVelocity(int32_t target_velocity)
     //}
     BytesUnion_FD data;
     int32_t target_velocity_int = (int32_t) (target_velocity);
-    data.uint8[0] = 0x02;
-    data.uint8[1] = 0x34;
-    data.uint8[2] = (target_velocity_int & 0x000000FF);
-    data.uint8[3] = (target_velocity_int & 0x0000FF00) >> 8;
-    data.uint8[4] = (target_velocity_int & 0x00FF0000) >> 16;
-    data.uint8[5] = (target_velocity_int & 0xFF000000) >> 24;
-    Serial.println("Target Velocity");
-    for (int i = 0; i < 6; i++)
-    {
-        Serial.printf("0x%02X ", data.uint8[i]);
-    }
+    data.uint8[0] = (target_velocity_int & 0x000000FF);
+    data.uint8[1] = (target_velocity_int & 0x0000FF00) >> 8;
+    data.uint8[2] = (target_velocity_int & 0x00FF0000) >> 16;
+    data.uint8[3] = (target_velocity_int & 0xFF000000) >> 24;
+    //Serial.println("Target Velocity");
+    //for (int i = 0; i < 6; i++)
+    //{
+    //    Serial.printf("0x%02X ", data.uint8[i]);
+    //}
     if (this->DRY_RUN)
     {
         this->transmitDummyMessage(MESSAGE_TYPE_CMD_COMMON, data, 6);
         return;
     }
-    this->transmitMessage(MESSAGE_TYPE_CMD_COMMON, data, 6);
+    this->transmitMessage(MESSAGE_TYPE_CMD_VEL, data, 4);
 }
 
 void RealmanMotorDriver::setTargetCurrent(int32_t target_current)
@@ -332,22 +330,20 @@ void RealmanMotorDriver::setTargetCurrent(int32_t target_current)
     BytesUnion_FD data;
     int32_t target_current_int = (int32_t) (target_current);
     // For safety, limit the current to 1000
-    if (target_current_int > 2000)
+    if (target_current_int > 1000)
     {
-        target_current_int = 2000;
+        target_current_int = 1000;
     }
-    data.uint8[0] = 0x02;
-    data.uint8[1] = 0x32;
-    data.uint8[2] = (target_current_int & 0x000000FF);
-    data.uint8[3] = (target_current_int & 0x0000FF00) >> 8;
-    data.uint8[4] = (target_current_int & 0x00FF0000) >> 16;
-    data.uint8[5] = (target_current_int & 0xFF000000) >> 24;
+    data.uint8[0] = (target_current_int & 0x000000FF);
+    data.uint8[1] = (target_current_int & 0x0000FF00) >> 8;
+    data.uint8[2] = (target_current_int & 0x00FF0000) >> 16;
+    data.uint8[3] = (target_current_int & 0xFF000000) >> 24;
     if (this->DRY_RUN)
     {
         this->transmitDummyMessage(MESSAGE_TYPE_CMD_COMMON, data, 6);
         return;
     }
-    this->transmitMessage(MESSAGE_TYPE_CMD_COMMON, data, 6);
+    this->transmitMessage(MESSAGE_TYPE_CMD_CUR, data, 4);
 }
 
 void RealmanMotorDriver::setZeroPosition(void)
@@ -368,7 +364,8 @@ void RealmanMotorDriver::transmitMessage(uint16_t message_type, BytesUnion_FD da
     txFrame.fdMode = 1;
     txFrame.data = data;
     txFrame.length = length;
-    this->can_handler->sendFrameFD(txFrame);
+    //this->can_handler->sendFrameFD(txFrame);
+    this->can_handler->WriteFrame(txFrame);
 }
 
 void RealmanMotorDriver::transmitDummyMessage(uint16_t message_type, BytesUnion_FD data, uint8_t length)
@@ -431,7 +428,7 @@ void RealmanMotorDriver::processCANFDMessage(CAN_FRAME_FD &message)
         break;
     case MESSAGE_TYPE_RES_SERVO:
         //Serial.printf("Processing response message for servo\n");
-        //processServoMessage(message);
+        processServoMessage(message);
         break;
     case MESSAGE_TYPE_CMD_COMMON:
     case MESSAGE_TYPE_CMD_JSTATE:

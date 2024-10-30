@@ -86,7 +86,7 @@ namespace realman_motor_driver
     class RealmanMotorDriver
     {
     public:
-        RealmanMotorDriver(uint8_t module_id, std::shared_ptr<CAN_COMMON> can_handler, boolean debug_mode = false, boolean DRY_RUN = false);
+        RealmanMotorDriver(uint8_t module_id, std::shared_ptr<MCP2517FD> can_handler, boolean debug_mode = false, boolean DRY_RUN = false);
         void processCANFDMessage(CAN_FRAME_FD &message);
         void processCommonMessage(CAN_FRAME_FD &message);
         void processStateMessage(CAN_FRAME_FD &message);
@@ -103,6 +103,9 @@ namespace realman_motor_driver
         void setTargetPosition(int32_t target_position);
         void setTargetVelocity(int32_t target_velocity);
         void setTargetCurrent(int32_t target_current);
+        void sendMultipleTargetPositions(const std::vector<int32_t>& target_positions);
+        void sendMultipleTargetVelocities(const std::vector<int32_t>& target_velocities);
+        void sendMultipleTargetCurrents(const std::vector<int32_t>& target_currents);
         void setZeroPosition(void);
         void loadCurrentState(void);
         void loadCurrentCurrent(void);
@@ -129,7 +132,7 @@ namespace realman_motor_driver
         boolean DRY_RUN = false;
         boolean SERIAL_DEBUG = false;
 
-        std::shared_ptr<CAN_COMMON> can_handler;
+        std::shared_ptr<MCP2517FD> can_handler;
         // データ送信
         void transmitMessage(uint16_t message_type, BytesUnion_FD data, uint8_t length);
         void transmitDummyMessage(uint16_t message_type, BytesUnion_FD data, uint8_t length);

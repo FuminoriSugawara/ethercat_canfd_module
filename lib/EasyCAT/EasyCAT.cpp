@@ -174,3 +174,84 @@ unsigned char EasyCAT_MainTask()                    // must be called cyclically
   }                                                         //
   return Status;                                            //     
 }
+
+unsigned char EasyCAT_ReadTask()                    // must be called cyclically by the application
+{
+  bool WatchDog = 0;
+  bool Operational = 0; 
+  unsigned char i;
+  ULONG TempLong; 
+  unsigned char Status;  
+ 
+  TempLong.Long = SPIReadRegisterIndirect (WDOG_STATUS, 1); // read watchdog status
+  if ((TempLong.Byte[0] & 0x01) == 0x01)                    //
+    WatchDog = 0;                                           // set/reset the corrisponding flag
+  else                                                      //
+    WatchDog = 1;                                           //
+    
+  TempLong.Long = SPIReadRegisterIndirect (AL_STATUS, 1);   // read the EtherCAT State Machine status
+  Status = TempLong.Byte[0] & 0x0F;                         // to see if we are in operational state
+  if (Status == ESM_OP)                                     // 
+    Operational = 1;                                        //
+  else                                                      // set/reset the corrisponding flag
+    Operational = 0;                                        //    
+
+
+                                                            //--- process data transfert ----------
+                                                            //                                                        
+  if (WatchDog | !Operational)                              // if watchdog is active or we are 
+  {                                                         // not in operational state, reset 
+    for (i=0; i < TOT_BYTE_NUM_OUT ; i++)                   // the output buffer
+    {                                                       //
+      EasyCAT_BufferOut.Byte[i] = 0;                                //
+    }                                                       //
+  }
+  
+  else                                                      
+  {                                                         
+    SPIReadProcRamFifo();                                   // otherwise transfer process data from 
+  }                                                         // the EtherCAT core to the output buffer  
+
+                 
+                                                            // the input buffer to the EtherCAT core  
+
+  if (WatchDog)                                             // return the status of the State Machine      
+  {                                                         // and of the watchdog
+    Status |= 0x80;                                         //
+  }                                                         //
+  return Status;                                            //     
+}
+
+unsigned char EasyCAT_WriteTask()                    // must be called cyclically by the application
+{
+  bool WatchDog = 0;
+  bool Operational = 0; 
+  unsigned char i;
+  ULONG TempLong; 
+  unsigned char Status;  
+ 
+  TempLong.Long = SPIReadRegisterIndirect (WDOG_STATUS, 1); // read watchdog status
+  if ((TempLong.Byte[0] & 0x01) == 0x01)                    //
+    WatchDog = 0;                                           // set/reset the corrisponding flag
+  else                                                      //
+    WatchDog = 1;                                           //
+    
+  TempLong.Long = SPIReadRegisterIndirect (AL_STATUS, 1);   // read the EtherCAT State Machine status
+  Status = TempLong.Byte[0] & 0x0F;                         // to see if we are in operational state
+  if (Status == ESM_OP)                                     // 
+    Operational = 1;                                        //
+  else                                                      // set/reset the corrisponding flag
+    Operational = 0;                                        //    
+
+
+  SPIWriteProcRamFifo();                                    // we always transfer process data from
+
+
+                                                            // the input buffer to the EtherCAT core  
+
+  if (WatchDog)                                             // return the status of the State Machine      
+  {                                                         // and of the watchdog
+    Status |= 0x80;                                         //
+  }                                                         //
+  return Status;                                            //     
+}
