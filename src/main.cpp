@@ -33,8 +33,9 @@
 //#define MOTOR_DRIVER_COUNT 7
 //#define MOTOR_DRIVER_COUNT 4
 //#define MOTOR_DRIVER_COUNT 1
-//#define CONTROL_MODE RMTR_SERVO_MODE_CUR
 #define CONTROL_MODE RMTR_SERVO_MODE_POS
+//#define CONTROL_MODE RMTR_SERVO_MODE_VEL
+//#define CONTROL_MODE RMTR_SERVO_MODE_CUR
 #define EASYCAT_INT_PIN 26
 
 #define TIME_LOG_BUFFER_SIZE 1000
@@ -88,6 +89,17 @@ constexpr std::array<uint8_t, 7> USED_MODULE_IDS = {0x01, 0x02, 0x03, 0x04, 0x05
 //constexpr std::array<uint8_t, 4> USED_MODULE_IDS = {0x01, 0x02, 0x03, 0x04};
 //constexpr std::array<uint8_t, 3> USED_MODULE_IDS = {0x01, 0x02, 0x03};
 //constexpr std::array<uint8_t, 2> USED_MODULE_IDS = {0x01, 0x02};
+//constexpr std::array<uint8_t, 1> USED_MODULE_IDS = {0x01};
+
+std::map<uint8_t, uint8_t> module_id_to_easycat_index_map = {
+    {0x01, 0},
+    {0x02, 1},
+    {0x03, 2},
+    {0x04, 3},
+    {0x05, 4},
+    {0x06, 5},
+    {0x07, 6}
+};
 
 std::map<uint8_t, realman_motor_driver::RealmanMotorDriver> motor_drivers_map;
 std::map<uint8_t, uint32_t> canfd_send_counts_map;
@@ -113,25 +125,25 @@ TaskHandle_t canfdWriteTaskHandle = NULL;
 TaskHandle_t easyCATReadTaskHandle = NULL;
 TaskHandle_t easyCATWriteTaskHandle = NULL;
 
-int32_t easycat_index = 0;
+int32_t easycat_task_index = 0;
 
 
 void IRAM_ATTR EasyCAT_IntHandler()
 {
     // 1msごとにINTが発生する
     BaseType_t xHigherPriorityTaskWoken = pdFALSE;
-    if (easycat_index >= 1)
+    if (easycat_task_index >= 1)
     {
         // 2msごとにEasyCATタスクに通知
         vTaskNotifyGiveFromISR(easyCATWriteTaskHandle, &xHigherPriorityTaskWoken);
         vTaskNotifyGiveFromISR(canfdWriteTaskHandle, &xHigherPriorityTaskWoken);
-        easycat_index = 0;
+        easycat_task_index = 0;
     }
     else
     {
         vTaskNotifyGiveFromISR(easyCATReadTaskHandle, &xHigherPriorityTaskWoken);
         vTaskNotifyGiveFromISR(canfdReadTaskHandle, &xHigherPriorityTaskWoken);
-        easycat_index++;
+        easycat_task_index++;
         timeLogIndex++;
     }
     if (xHigherPriorityTaskWoken)
@@ -863,14 +875,14 @@ void canfdHealthCheckTask(void *pvParameters) {
 
 void loadTargetValuesFromEtherCAT()
 {
-    uint32_t index = 0;
     for (uint8_t module_id : USED_MODULE_IDS)
     {
+        uint8_t easycat_index = module_id_to_easycat_index_map.at(module_id);
         int32_t target_position = 0;
         int32_t target_velocity = 0;
         int32_t target_torque = 0;
         uint16_t control_word = 0;
-        switch (index)
+        switch (easycat_index)
         {
         case 0:
             target_position = EasyCAT_BufferOut.Cust.Position_1;
@@ -927,7 +939,6 @@ void loadTargetValuesFromEtherCAT()
         target_velocities_map[module_id] = target_velocity;
         target_torques_map[module_id] = target_torque;
         control_words_map[module_id] = control_word;
-        index++;
     }
 }
 
@@ -945,8 +956,8 @@ void loadCurrentValuesFromMotorDrivers() {
 
 // set current values to EasyCAT buffer
 void setCurrentValuesToEasyCATBuffer() {
-    uint32_t index = 0;
     for (uint8_t module_id : USED_MODULE_IDS) {
+        uint8_t index = module_id_to_easycat_index_map.at(module_id);
         switch(index) {
         case 0:
             EasyCAT_BufferIn.Cust.ActualPosition_1 = actual_positions_map.at(module_id);
