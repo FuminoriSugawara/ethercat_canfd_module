@@ -69,7 +69,6 @@ int timeLogIndex = 0;
 
 
 unsigned long previousMs = 0;
-const int OUTPUTS_COUNT = 8;
 boolean DEBUG_MODE = false;
 boolean DRY_RUN = false;
 // EasyCAT buffer

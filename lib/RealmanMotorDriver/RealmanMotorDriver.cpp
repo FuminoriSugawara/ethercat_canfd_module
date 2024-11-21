@@ -329,11 +329,7 @@ void RealmanMotorDriver::setTargetCurrent(int32_t target_current)
     
     BytesUnion_FD data;
     int32_t target_current_int = (int32_t) (target_current);
-    // For safety, limit the current to 1000
-    if (target_current_int > 1000)
-    {
-        target_current_int = 1000;
-    }
+    
     data.uint8[0] = (target_current_int & 0x000000FF);
     data.uint8[1] = (target_current_int & 0x0000FF00) >> 8;
     data.uint8[2] = (target_current_int & 0x00FF0000) >> 16;
