@@ -80,6 +80,16 @@ void RealmanMotorDriver::switchControlMode(CONTROL_MODE control_mode)
     };
 }
 
+void RealmanMotorDriver::setControlMode(uint8_t control_mode)
+{
+    BytesUnion_FD data;
+    data.uint8[0] = 0x02;
+    data.uint8[1] = 0x30;
+    data.uint8[2] = control_mode;
+    this->transmitMessage(MESSAGE_TYPE_CMD_COMMON, data, 3);
+    this->control_mode = control_mode;
+}
+
 void RealmanMotorDriver::setPositionControlMode(void)
 {
     BytesUnion_FD data;
@@ -151,6 +161,11 @@ void RealmanMotorDriver::processCommonMessage(CAN_FRAME_FD &message)
     else if (command_index == 0x49) // IAP update success
     {
         Serial.printf("ID: 0x%02X, IAP update success\n", this->module_id);
+        if(this->connection_state == OFFLINE && this->brake_state == BRAKE_ON && this->driver_state == DRIVER_DISABLED)
+        {
+            this->brake_state = BRAKE_OFF;
+            this->driver_state = DRIVER_ENABLED;
+        }
         this->connection_state = ONLINE;
     }
     else if (command_index == 0x30) // Control mode
@@ -270,6 +285,22 @@ uint16_t RealmanMotorDriver::getErrorState(void)
 bool RealmanMotorDriver::getConnectionState(void)
 {
     return (this->connection_state == ONLINE);
+}
+
+uint8_t RealmanMotorDriver::getControlMode(void)
+{
+    return this->control_mode;
+}
+
+StatusWord RealmanMotorDriver::getStatusWord(void)
+{
+    StatusWord status_word;
+    status_word.word = 0;
+    status_word.bits.error = this->error_state > 0;
+    status_word.bits.enable = this->driver_state == DRIVER_ENABLED;
+    status_word.bits.brake = this->brake_state;
+    status_word.bits.control_mode = this->control_mode;
+    return status_word;
 }
 
 void RealmanMotorDriver::setTargetPosition(int32_t target_position)

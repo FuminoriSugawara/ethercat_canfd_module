@@ -83,6 +83,36 @@ namespace realman_motor_driver
         VELOCITY_CONTROL,
         CURRENT_CONTROL
     } CONTROL_MODE;
+
+    typedef union ControlWord {
+        uint16_t word;
+        struct
+        {
+            bool enable : 1;
+            bool reserved_1 : 3;
+            uint8_t control_mode : 2;
+            bool reserved_2 : 2;
+            uint8_t module_id : 4;
+            bool reserved_3 : 4;
+        } bits;
+
+    } ControlWord;
+
+    typedef union StatusWord {
+        uint16_t word;
+        struct
+        {
+            bool enable : 1;
+            bool brake : 1;
+            bool error : 1;
+            bool reserved_1 : 1;
+            uint8_t control_mode : 2;
+            bool reserved_2 : 2;
+            bool reserved_3 : 4;
+            bool reserved_4 : 4;
+        } bits;
+    } StatusWord;
+
     class RealmanMotorDriver
     {
     public:
@@ -107,6 +137,7 @@ namespace realman_motor_driver
         void sendMultipleTargetVelocities(const std::vector<int32_t>& target_velocities);
         void sendMultipleTargetCurrents(const std::vector<int32_t>& target_currents);
         void setZeroPosition(void);
+        void setControlMode(uint8_t control_mode);
         void loadCurrentState(void);
         void loadCurrentCurrent(void);
         void loadCurrentVelocity(void);
@@ -116,13 +147,15 @@ namespace realman_motor_driver
         int32_t getCurrentTorque(void);
         uint16_t getErrorState(void);
         bool getConnectionState(void);
+        uint8_t getControlMode(void);
+        StatusWord getStatusWord(void);
 
 
     private:
         CONNECTION_STATE connection_state = OFFLINE;
         DRIVER_STATE driver_state = DRIVER_DISABLED;
         BRAKE_STATE brake_state = BRAKE_ON;
-        CONTROL_MODE control_mode = POSITION_CONTROL;
+        uint8_t control_mode = 3;
         uint16_t error_state = 0;
         uint8_t module_id;
         int32_t current_position = 0;
