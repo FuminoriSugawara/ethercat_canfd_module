@@ -77,11 +77,12 @@ namespace realman_motor_driver
         BRAKE_ON
     } BRAKE_STATE;
 
-    typedef enum
+    typedef enum: uint8_t
     {
-        POSITION_CONTROL,
-        VELOCITY_CONTROL,
-        CURRENT_CONTROL
+        POSITION_CONTROL = 0x03, // 0x03
+        VELOCITY_CONTROL = 0x02, // 0x02
+        CURRENT_CONTROL = 0x01, // 0x01
+        OPEN_CONTROL = 0x00,// 0x00
     } CONTROL_MODE;
 
     typedef union ControlWord {
@@ -113,64 +114,95 @@ namespace realman_motor_driver
         } bits;
     } StatusWord;
 
+    typedef struct MessageHeader
+    {
+        uint8_t module_id;
+        uint16_t message_type;
+    } MessageHeader;
+
+    
+    typedef struct ServoResponse
+    {
+        uint8_t module_id;
+        uint16_t message_type;
+        uint32_t timestamp;
+        int32_t current;
+        int32_t velocity;
+        int32_t position;
+        uint16_t enable_state;
+        uint16_t error_code;
+    } ServoResponse;
+
+    typedef struct JointStateResponse
+    {
+        uint8_t module_id;
+        uint16_t message_type;
+        uint32_t timestamp;
+        uint16_t error_code;
+        int16_t system_voltage;
+        int16_t system_temperature;
+        bool enable_state;
+        bool brake_state;
+        int32_t position;
+        int32_t current;
+    } JointStateResponse;
+
+    typedef union CommonResponseData
+    {
+        uint8_t uint8[4];
+        int8_t int8[4];
+        uint16_t uint16[2];
+        int16_t int16[2];
+        uint32_t uint32;
+        int32_t int32;
+    } CommonResponseData;
+
+    typedef struct CommonResponse
+    {
+        uint8_t operation_type;
+        uint8_t command_index;
+        CommonResponseData data;
+    } CommonResponse;
+
+    typedef union ParsedResponse
+    {
+        ServoResponse servo_response;
+        JointStateResponse joint_state_response;
+        CommonResponse common_response;
+    } ParsedResponse;
+    
     class RealmanMotorDriver
     {
     public:
-        RealmanMotorDriver(uint8_t module_id, std::shared_ptr<MCP2517FD> can_handler, boolean debug_mode = false, boolean DRY_RUN = false);
-        void processCANFDMessage(CAN_FRAME_FD &message);
-        void processCommonMessage(CAN_FRAME_FD &message);
-        void processStateMessage(CAN_FRAME_FD &message);
-        void processServoMessage(CAN_FRAME_FD &message);
-        void initialize(void);
-        void clearJointError(void);
-        void setDriverEnabled(void);
-        void setDriverDisabled(void);
-        void setConnectionOnline(void);
-        void switchControlMode(CONTROL_MODE control_mode);
-        void setPositionControlMode(void);
-        void setVelocityControlMode(void);
-        void setCurrentControlMode(void);
-        void setTargetPosition(int32_t target_position);
-        void setTargetVelocity(int32_t target_velocity);
-        void setTargetCurrent(int32_t target_current);
-        void sendMultipleTargetPositions(const std::vector<int32_t>& target_positions);
-        void sendMultipleTargetVelocities(const std::vector<int32_t>& target_velocities);
-        void sendMultipleTargetCurrents(const std::vector<int32_t>& target_currents);
-        void setZeroPosition(void);
-        void setControlMode(uint8_t control_mode);
-        void loadCurrentState(void);
-        void loadCurrentCurrent(void);
-        void loadCurrentVelocity(void);
-        void loadCurrentPosition(void);
-        int32_t getCurrentPosition(void);
-        int32_t getCurrentVelocity(void);
-        int32_t getCurrentTorque(void);
-        uint16_t getErrorState(void);
-        bool getConnectionState(void);
-        uint8_t getControlMode(void);
-        StatusWord getStatusWord(void);
+        RealmanMotorDriver(std::shared_ptr<MCP2517FD> can_handler);
+        ParsedResponse parseCANFDMessage(CAN_FRAME_FD &message);
+        CommonResponse processCommonMessage(CAN_FRAME_FD &message);
+        JointStateResponse processStateMessage(CAN_FRAME_FD &message);
+        ServoResponse processServoMessage(CAN_FRAME_FD &message);
+        void writeClearJointError(uint8_t module_id);
+        void writeDriverEnabled(uint8_t module_id);
+        void writeDriverDisabled(uint8_t module_id);
+        void writeConnectionOnline(uint8_t module_id);
+        void writeControlMode(uint8_t module_id, uint8_t control_mode);
+        void writePositionControlMode(uint8_t module_id);
+        void writeVelocityControlMode(uint8_t module_id);
+        void writeCurrentControlMode(uint8_t module_id);
+        void writeTargetPosition(uint8_t module_id, int32_t target_position);
+        void writeTargetVelocity(uint8_t module_id, int32_t target_velocity);
+        void writeTargetCurrent(uint8_t module_id, int32_t target_current);
+        void writeZeroPosition(uint8_t module_id);
+        void readCurrentState(uint8_t module_id);
+        void readCurrentCurrent(uint8_t module_id);
+        void readCurrentVelocity(uint8_t module_id);
+        void readCurrentPosition(uint8_t module_id);
 
 
     private:
-        CONNECTION_STATE connection_state = OFFLINE;
-        DRIVER_STATE driver_state = DRIVER_DISABLED;
-        BRAKE_STATE brake_state = BRAKE_ON;
-        uint8_t control_mode = 3;
-        uint16_t error_state = 0;
-        uint8_t module_id;
-        int32_t current_position = 0;
-        int32_t current_velocity = 0;
-        int32_t current_torque = 0;
-        boolean IS_DEBUG = false;
-        boolean DRY_RUN = false;
-        boolean SERIAL_DEBUG = false;
-
         std::shared_ptr<MCP2517FD> can_handler;
         // データ送信
-        void transmitMessage(uint16_t message_type, BytesUnion_FD data, uint8_t length);
-        void transmitDummyMessage(uint16_t message_type, BytesUnion_FD data, uint8_t length);
+        void _transmitMessage(uint8_t module_id, uint16_t message_type, BytesUnion_FD data, uint8_t length);
+        MessageHeader _parseArbitrationId(uint16_t arbitration_id);
 
-        void transmitDebugMessage(CAN_FRAME_FD &message);
     };
 }
 

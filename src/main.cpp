@@ -1,5 +1,4 @@
 //#include <Arduino.h>
-#include <unordered_map>
 #include <map>
 #include <memory>
 #include <array>
@@ -17,6 +16,7 @@
 #include "EasyCAT.h"
 #include <RealmanMotorDriver.hpp>
 #include "esp_task_wdt.h"
+#include "Logger.hpp"
 
 #define PIN_NUM_MISO 19
 #define PIN_NUM_MOSI 23
@@ -30,6 +30,7 @@
 
 #define UART_NUM UART_NUM_0
 #define BUF_SIZE (1024)
+#define MAX_MODULE_SIZE 8
 
 //#define MOTOR_DRIVER_COUNT 7
 //#define MOTOR_DRIVER_COUNT 4
@@ -39,70 +40,27 @@
 //#define CONTROL_MODE RMTR_SERVO_MODE_CUR
 #define EASYCAT_INT_PIN 26
 
-#define TIME_LOG_BUFFER_SIZE 1000
-
-#define MAX_MOTOR_COUNT 20
-
-typedef struct {
-    int64_t easyCATRead;
-    int64_t easyCATWrite;
-    int64_t loadTargetValuesFromEtherCAT;
-    int64_t motorControl;
-    int64_t loadRxQueue;
-    int64_t loadCurrentValuesFromMotorDrivers;
-    int64_t setCurrentValuesToEasyCATBuffer;
-    int64_t easyCATReadTaskTotal;
-    int64_t easyCATWriteTaskTotal;
-    int64_t canfdReadTaskTotal;
-    int64_t canfdWriteTaskTotal;
-} TimeLog;
-
-typedef struct {
-    TimeLog average;
-    TimeLog min;
-    TimeLog max;
-    uint32_t easyCATReadTaskOverflowCount;
-    uint32_t easyCATWriteTaskOverflowCount;
-    uint32_t canfdReadTaskOverflowCount;
-    uint32_t canfdWriteTaskOverflowCount;
-} TimeLogStats;
-
-TimeLog timeLog[TIME_LOG_BUFFER_SIZE];
-int timeLogIndex = 0;
-
+#define MAX_MODULE_SIZE 8
+realman_motor_driver::RealmanMotorDriver motor_driver = realman_motor_driver::RealmanMotorDriver(
+    std::make_shared<MCP2517FD>(CAN1)
+); 
 
 unsigned long previousMs = 0;
-boolean DEBUG_MODE = false;
-boolean DRY_RUN = false;
-boolean INIT_OK = false;
-boolean INITIALIZING = false;
 // EasyCAT buffer
 PROCBUFFER_OUT _EasyCAT_BufferOut;  // output process data buffer
-// canfd send count;
-volatile uint32_t canfd_send_count = 0;
-// canfd receive count;
-volatile uint32_t canfd_receive_count = 0;
 
-volatile uint32_t easycat_count = 0;
 
-volatile uint32_t motor_control_count = 0;
-volatile uint32_t rx_queue_count = 0;
-
-std::unordered_map<uint8_t, uint8_t> module_id_to_easycat_index_map;
-std::unordered_map<uint8_t, realman_motor_driver::RealmanMotorDriver> motor_drivers_map;
-
-std::unordered_map<uint8_t, uint32_t> canfd_send_counts_map;
-
-std::unordered_map<uint8_t, uint32_t> canfd_receive_counts_map;
-std::unordered_map<uint8_t, bool> motor_driver_connection_states_map;
-std::unordered_map<uint8_t, int32_t> actual_positions_map;
-std::unordered_map<uint8_t, int32_t> actual_velocities_map;
-std::unordered_map<uint8_t, int32_t> actual_torques_map;
-std::unordered_map<uint8_t, uint16_t> status_words_map;
-std::unordered_map<uint8_t, int32_t> target_positions_map;
-std::unordered_map<uint8_t, int32_t> target_velocities_map;
-std::unordered_map<uint8_t, int32_t> target_torques_map;
-std::unordered_map<uint8_t, uint16_t> control_words_map;
+std::map<uint8_t, uint8_t> module_id_index_map;
+std::array<uint32_t, MAX_MODULE_SIZE> canfd_send_counts;
+std::array<uint32_t, MAX_MODULE_SIZE> canfd_receive_counts;
+std::array<int32_t, MAX_MODULE_SIZE> actual_positions;
+std::array<int32_t, MAX_MODULE_SIZE> actual_velocities;
+std::array<int32_t, MAX_MODULE_SIZE> actual_currents;
+std::array<uint16_t, MAX_MODULE_SIZE> status_words;
+std::array<int32_t, MAX_MODULE_SIZE> target_positions;
+std::array<int32_t, MAX_MODULE_SIZE> target_velocities;
+std::array<int32_t, MAX_MODULE_SIZE> target_currents;
+std::array<uint16_t, MAX_MODULE_SIZE> control_words;
 
 
 // Timer configuration
@@ -110,7 +68,6 @@ std::unordered_map<uint8_t, uint16_t> control_words_map;
 #define TIMER_SCALE           (TIMER_BASE_CLK / TIMER_DIVIDER)  // convert counter value to seconds
 #define TIMER_INTERVAL_SEC   (0.002) // 1ms interval
 
-TaskHandle_t initTaskHandle = NULL;
 TaskHandle_t canfdReadTaskHandle = NULL;
 TaskHandle_t canfdWriteTaskHandle = NULL;
 TaskHandle_t easyCATReadTaskHandle = NULL;
@@ -118,35 +75,69 @@ TaskHandle_t easyCATWriteTaskHandle = NULL;
 
 int32_t easycat_task_index = 0;
 
+typedef union ControlWord
+{
+    uint16_t word;
+    struct
+    {
+        bool enable : 1;
+        bool reserved_1 : 3;
+        uint8_t control_mode : 2;
+        uint8_t reserved_2 : 2;
+        uint8_t control_state : 4;
+        uint8_t module_id : 4;
+    } bits;
+
+} ControlWord;
+
+typedef union StatusWord
+{
+    uint16_t word;
+    struct
+    {
+        bool enable : 1;
+        bool brake : 1;
+        bool error : 1;
+        bool reserved_1 : 1;
+        uint8_t control_mode : 2;
+        uint8_t reserved_2 : 2;
+        uint8_t control_state : 4;
+        uint8_t reserved_3 : 4;
+    } bits;
+} StatusWord;
+
+ enum class ControllerState
+    {
+        STARTING = 0,
+        INITIALIZING = 1,
+        CONNECTION_WAITING = 2,
+        INITIAL_MODE_SETTING = 3,
+        IDLING = 4,
+        HOMING = 5,
+        CONTROLLING = 6,
+        MODE_CHANGING = 7,
+        STOPPING = 8,
+        ENABLING = 9,
+    };
 
 void IRAM_ATTR EasyCAT_IntHandler()
 {
+    Logger::easycat_count++;
     // 1msごとにINTが発生する
     BaseType_t xHigherPriorityTaskWoken = pdFALSE;
-    if (!INIT_OK) {
-        if (!INITIALIZING)
-        {
-            vTaskNotifyGiveFromISR(initTaskHandle, &xHigherPriorityTaskWoken);
-        }
-        if (xHigherPriorityTaskWoken)
-        {
-            portYIELD_FROM_ISR();
-        }
-        return;
-    }
     if (easycat_task_index >= 1)
     {
         // 2msごとにEasyCATタスクに通知
-        //vTaskNotifyGiveFromISR(easyCATWriteTaskHandle, &xHigherPriorityTaskWoken);
-        //vTaskNotifyGiveFromISR(canfdWriteTaskHandle, &xHigherPriorityTaskWoken);
+        vTaskNotifyGiveFromISR(easyCATWriteTaskHandle, &xHigherPriorityTaskWoken);
+        vTaskNotifyGiveFromISR(canfdWriteTaskHandle, &xHigherPriorityTaskWoken);
         easycat_task_index = 0;
     }
     else
     {
-        //vTaskNotifyGiveFromISR(easyCATReadTaskHandle, &xHigherPriorityTaskWoken);
-        //vTaskNotifyGiveFromISR(canfdReadTaskHandle, &xHigherPriorityTaskWoken);
-        //easycat_task_index++;
-        //timeLogIndex++;
+        vTaskNotifyGiveFromISR(easyCATReadTaskHandle, &xHigherPriorityTaskWoken);
+        vTaskNotifyGiveFromISR(canfdReadTaskHandle, &xHigherPriorityTaskWoken);
+        easycat_task_index++;
+        Logger::timeLogIndex++;
     }
     if (xHigherPriorityTaskWoken)
     {
@@ -154,110 +145,106 @@ void IRAM_ATTR EasyCAT_IntHandler()
     }
 }
 
+void initializeMotorDriversMap() {
 
-void init()
+    for (uint8_t i = 0; i < MAX_MODULE_SIZE; i++)
+    {
+        canfd_send_counts[i] = 0;
+        canfd_receive_counts[i] = 0;
+        actual_positions[i] = 0;
+        actual_velocities[i] = 0;
+        actual_currents[i] = 0;
+        status_words[i] = 0;
+        target_positions[i] = 0;
+        target_velocities[i] = 0;
+        target_currents[i] = 0;
+        control_words[i] = 0;
+    }
+}
+
+void processMessage(CAN_FRAME_FD &rxFrame)
 {
-    module_id_to_easycat_index_map.reserve(MAX_MOTOR_COUNT * 2);
-    motor_drivers_map.reserve(MAX_MOTOR_COUNT * 2);
-    canfd_send_counts_map.reserve(MAX_MOTOR_COUNT * 2);
-    canfd_receive_counts_map.reserve(MAX_MOTOR_COUNT * 2);
-    motor_driver_connection_states_map.reserve(MAX_MOTOR_COUNT * 2);
-    actual_positions_map.reserve(MAX_MOTOR_COUNT * 2);
-    actual_velocities_map.reserve(MAX_MOTOR_COUNT * 2);
-    actual_torques_map.reserve(MAX_MOTOR_COUNT * 2);
-    status_words_map.reserve(MAX_MOTOR_COUNT * 2);
-    target_positions_map.reserve(MAX_MOTOR_COUNT * 2);
-    target_velocities_map.reserve(MAX_MOTOR_COUNT * 2);
-    target_torques_map.reserve(MAX_MOTOR_COUNT * 2);
-    control_words_map.reserve(MAX_MOTOR_COUNT * 2);
+    uint8_t module_id = (rxFrame.id & 0x00FF);
+    uint16_t message_type = (rxFrame.id & 0x0F00);
+    if (module_id_index_map.find(module_id) == module_id_index_map.end())
+    {
+        ESP_LOGE("CANFD", "Module ID %d not found", module_id);
+        return;
+    }
+    uint8_t index = module_id_index_map.at(module_id);
+    ControlWord control_word;
+    control_word.word = control_words[index];
+    StatusWord status_word;
+    status_word.word = status_words[index];
+    status_word.bits.control_mode = control_word.bits.control_mode;
+    status_word.bits.control_state = control_word.bits.control_state;
+
+    auto response = motor_driver.parseCANFDMessage(rxFrame);
+    if (message_type == MESSAGE_TYPE_RES_SERVO)
+    {
+        actual_positions[index] = response.servo_response.position;
+        actual_velocities[index] = response.servo_response.velocity;
+        actual_currents[index] = response.servo_response.current;
+        status_word.bits.enable = response.servo_response.enable_state;
+        status_word.bits.error = response.servo_response.error_code > 0;
+        status_word.bits.brake = response.servo_response.error_code > 0;
+    }
+    else if (message_type == MESSAGE_TYPE_RES_COMMON)
+    {
+        auto command_index = response.common_response.command_index;
+        uint8_t data = response.common_response.data.uint8[0];
+
+        if (command_index == 0x49 && data == 0x01)
+        {
+            status_word.bits.enable = true;
+        }
+        else if (command_index == 0x30)
+        {
+            status_word.bits.control_mode = control_word.bits.control_mode;
+        }
+    }
+    else if (message_type == MESSAGE_TYPE_RES_JSTATE)
+    {
+        auto error_code = response.joint_state_response.error_code;
+        auto system_voltage = response.joint_state_response.system_voltage;
+        auto system_temperature = response.joint_state_response.system_temperature;
+        auto enable_state = response.joint_state_response.enable_state;
+        auto brake_state = response.joint_state_response.brake_state;
+        auto position = response.joint_state_response.position;
+        auto current = response.joint_state_response.current;
+        status_word.bits.enable = enable_state;
+        status_word.bits.brake = brake_state;
+        status_word.bits.error = error_code > 0;
+        actual_positions[index] = position;
+        actual_currents[index] = current;
+    }
+    status_words[index] = status_word.word;
+
+    canfd_receive_counts[index]++;
+    Logger::canfd_receive_count++;
 }
 
 
-//void initializeMotorDriversMap() {
-//    std::shared_ptr<MCP2517FD> can1_ptr = std::make_shared<MCP2517FD>(CAN1);
-//
-//    for (uint8_t module_id : USED_MODULE_IDS) {
-//        motor_drivers_map.emplace(
-//            module_id,
-//            realman_motor_driver::RealmanMotorDriver(module_id, can1_ptr, DEBUG_MODE, DRY_RUN)
-//        );
-//        canfd_send_counts_map.emplace(module_id, 0);
-//        canfd_receive_counts_map.emplace(module_id, 0);
-//        motor_driver_connection_states_map.emplace(module_id, false);
-//        actual_positions_map.emplace(module_id, 0);
-//        actual_velocities_map.emplace(module_id, 0);
-//        actual_torques_map.emplace(module_id, 0);
-//        status_words_map.emplace(module_id, 0);
-//        target_positions_map.emplace(module_id, 0);
-//        target_velocities_map.emplace(module_id, 0);
-//        target_torques_map.emplace(module_id, 0);
-//        control_words_map.emplace(module_id, 0);
-//    }
-//}
-
-void initMotorDriver(uint8_t module_id, uint8_t control_mode) {
-    std::shared_ptr<MCP2517FD> can1_ptr = std::make_shared<MCP2517FD>(CAN1);
-
-
-    //motor_drivers_map.emplace(
-    //    module_id,
-    //    realman_motor_driver::RealmanMotorDriver(module_id, can1_ptr, DEBUG_MODE, DRY_RUN));
-    //realman_motor_driver::RealmanMotorDriver driver = realman_motor_driver::RealmanMotorDriver(module_id, control_mode, can1_ptr, DEBUG_MODE, DRY_RUN);
-    canfd_send_counts_map.emplace(module_id, 0);
-    canfd_receive_counts_map.emplace(module_id, 0);
-    motor_driver_connection_states_map.emplace(module_id, false);
-    //actual_positions_map.emplace(module_id, 0);
-    //actual_velocities_map.emplace(module_id, 0);
-    //actual_torques_map.emplace(module_id, 0);
-    //status_words_map.emplace(module_id, 0);
-    //target_positions_map.emplace(module_id, 0);
-    //target_velocities_map.emplace(module_id, 0);
-    //target_torques_map.emplace(module_id, 0);
-    //control_words_map.emplace(module_id, 0);
-}
-
-//int32_t actual_positions[8] = {0, 0, 0, 0, 0, 0, 0, 0};
-//int32_t actual_velocities[8] = {0, 0, 0, 0, 0, 0, 0, 0};
-//int32_t actual_torques[8] = {0, 0, 0, 0, 0, 0, 0, 0};
-//uint16_t status_words[8] = {0, 0, 0, 0, 0, 0, 0, 0};
-//
-//int32_t target_positions[8] = {0, 0, 0, 0, 0, 0, 0, 0};
-//int32_t target_velocities[8] = {0, 0, 0, 0, 0, 0, 0, 0};
-//int32_t target_torques[8] = {0, 0, 0, 0, 0, 0, 0, 0};
-//uint16_t control_words[8] = {0, 0, 0, 0, 0, 0, 0, 0};
 
 class MyCANListener : public CANListener {
 public:
-
     void gotFrameFD(CAN_FRAME_FD *frame, int mailbox) override {
         CAN_FRAME_FD rxFrame;
-        CAN1.readFD(rxFrame);
-        uint8_t module_id = (rxFrame.id & 0x00FF);
-        auto it = motor_drivers_map.find(module_id);
-        if (it == motor_drivers_map.end()) {
-            return;
+        if (CAN1.readFD(rxFrame))
+        {
+            processMessage(rxFrame);
         }
-        motor_drivers_map.at(module_id).processCANFDMessage(rxFrame);
-        canfd_receive_counts_map[module_id]++;
-        canfd_receive_count++;
     }   
 };
 
 void loadRxQueue() {
     CAN1.intHandler();
-    rx_queue_count ++;
+    Logger::rx_queue_count ++;
     uint32_t rxQueueCount = CAN1.waitingRxQueueCount();
     for (uint32_t i = 0; i < rxQueueCount; i++) {
         CAN_FRAME_FD rxFrame;
         if (CAN1.readFD(rxFrame)) {
-            uint8_t module_id = (rxFrame.id & 0x00FF);
-            auto it = motor_drivers_map.find(module_id);
-            if (it == motor_drivers_map.end()) {
-                return;
-            }
-            motor_drivers_map.at(module_id).processCANFDMessage(rxFrame);
-            canfd_receive_count++;
-            canfd_receive_counts_map[module_id]++;
+            processMessage(rxFrame);
         }
     }
 }
@@ -272,270 +259,6 @@ int64_t measureTime( void (*func)(void) )
     return end - start;
 }
 
-TimeLogStats calcStats() {
-    TimeLogStats stats;
-
-    int64_t easyCATReadMin = INT64_MAX;
-    int64_t easyCATWriteMin = INT64_MAX;
-    int64_t loadTargetValuesFromEtherCATMin = INT64_MAX;
-    int64_t motorControlMin = INT64_MAX;
-    int64_t loadCurrentValuesFromMotorDriversMin = INT64_MAX;
-    int64_t setCurrentValuesToEasyCATBufferMin = INT64_MAX;
-    int64_t loadRxQueueMin = INT64_MAX;
-    int64_t easyCatReadTaskTotalMin = INT64_MAX;
-    int64_t easyCatWriteTaskTotalMin = INT64_MAX;
-    int64_t canfdReadTaskTotalMin = INT64_MAX;
-    int64_t canfdWriteTaskTotalMin = INT64_MAX;
-
-    int64_t easyCATReadMax = 0;
-    int64_t easyCATWriteMax = 0;
-    int64_t loadTargetValuesFromEtherCATMax = 0;
-    int64_t motorControlMax = 0;
-    int64_t loadCurrentValuesFromMotorDriversMax = 0;
-    int64_t setCurrentValuesToEasyCATBufferMax = 0;
-    int64_t loadRxQueueMax = 0;
-    int64_t easyCatReadTaskTotalMax = 0;
-    int64_t easyCatWriteTaskTotalMax = 0;
-    int64_t canfdReadTaskTotalMax = 0;
-    int64_t canfdWriteTaskTotalMax = 0;
-
-
-    int64_t easyCATReadSum = 0;
-    int64_t easyCATWriteSum = 0;
-    int64_t loadTargetValuesFromEtherCATSum = 0;
-    int64_t motorControlSum = 0;
-    int64_t loadCurrentValuesFromMotorDriversSum = 0;
-    int64_t setCurrentValuesToEasyCATBufferSum = 0;
-    int64_t loadRxQueueSum = 0;
-    int64_t easyCatReadTaskTotalSum = 0;
-    int64_t easyCatWriteTaskTotalSum = 0;
-    int64_t canfdReadTaskTotalSum = 0;
-    int64_t canfdWriteTaskTotalSum = 0;
-
-    //int32_t overflowCount = 0;
-    int32_t easyCATReadTaskOverflowCount = 0;
-    int32_t easyCATWriteTaskOverflowCount = 0;
-    int32_t canfdReadTaskOverflowCount = 0;
-    int32_t canfdWriteTaskOverflowCount = 0;
-
-    if (timeLogIndex == 0)
-    {
-        return stats;
-    }
-    int32_t size = ((timeLogIndex + 1)< TIME_LOG_BUFFER_SIZE) ? (timeLogIndex + 1) : TIME_LOG_BUFFER_SIZE;
-    for (int i = 0; i < size; i++)
-    {
-        timeLog[i].easyCATReadTaskTotal = timeLog[i].easyCATRead + timeLog[i].loadTargetValuesFromEtherCAT;
-        timeLog[i].canfdReadTaskTotal = timeLog[i].loadRxQueue;
-
-        timeLog[i].easyCATWriteTaskTotal = timeLog[i].easyCATWrite + timeLog[i].loadCurrentValuesFromMotorDrivers + timeLog[i].setCurrentValuesToEasyCATBuffer; 
-        timeLog[i].canfdWriteTaskTotal = timeLog[i].motorControl;
-
-        if (timeLog[i].easyCATReadTaskTotal > 1000)
-        {
-            easyCATReadTaskOverflowCount++;
-        }
-
-        if (timeLog[i].easyCATWriteTaskTotal > 1000)
-        {
-            easyCATWriteTaskOverflowCount++;
-        }
-
-        if (timeLog[i].canfdReadTaskTotal > 1000)
-        {
-            canfdReadTaskOverflowCount++;
-        }
-
-        if (timeLog[i].canfdWriteTaskTotal > 1000)
-        {
-            canfdWriteTaskOverflowCount++;
-        }
-
-
-        easyCATReadSum += timeLog[i].easyCATRead;
-        easyCATWriteSum += timeLog[i].easyCATWrite;
-        loadTargetValuesFromEtherCATSum += timeLog[i].loadTargetValuesFromEtherCAT;
-        motorControlSum += timeLog[i].motorControl;
-        loadCurrentValuesFromMotorDriversSum += timeLog[i].loadCurrentValuesFromMotorDrivers;
-        setCurrentValuesToEasyCATBufferSum += timeLog[i].setCurrentValuesToEasyCATBuffer;
-        loadRxQueueSum += timeLog[i].loadRxQueue;
-
-        easyCatReadTaskTotalSum += timeLog[i].easyCATReadTaskTotal;
-        easyCatWriteTaskTotalSum += timeLog[i].easyCATWriteTaskTotal;
-        canfdReadTaskTotalSum += timeLog[i].canfdReadTaskTotal;
-        canfdWriteTaskTotalSum += timeLog[i].canfdWriteTaskTotal;
-
-
-        //if (timeLog[i].easyCATApplication < easyCATApplicationMin)
-        //{
-        //    easyCATApplicationMin = timeLog[i].easyCATApplication;
-        //}
-        if (timeLog[i].easyCATRead > 0 && timeLog[i].easyCATRead < easyCATReadMin)
-        {
-            easyCATReadMin = timeLog[i].easyCATRead;
-        }
-
-        if (timeLog[i].easyCATWrite > 0 && timeLog[i].easyCATWrite < easyCATWriteMin)
-        {
-            easyCATWriteMin = timeLog[i].easyCATWrite;
-        }
-
-        if (timeLog[i].loadTargetValuesFromEtherCAT > 0 && timeLog[i].loadTargetValuesFromEtherCAT < loadTargetValuesFromEtherCATMin)
-        {
-            loadTargetValuesFromEtherCATMin = timeLog[i].loadTargetValuesFromEtherCAT;
-        }
-
-        if (timeLog[i].motorControl > 0 && timeLog[i].motorControl < motorControlMin)
-        {
-            motorControlMin = timeLog[i].motorControl;
-        }
-
-        if (timeLog[i].loadCurrentValuesFromMotorDrivers > 0 && timeLog[i].loadCurrentValuesFromMotorDrivers < loadCurrentValuesFromMotorDriversMin)
-        {
-            loadCurrentValuesFromMotorDriversMin = timeLog[i].loadCurrentValuesFromMotorDrivers;
-        }
-
-        if (timeLog[i].setCurrentValuesToEasyCATBuffer > 0 && timeLog[i].setCurrentValuesToEasyCATBuffer < setCurrentValuesToEasyCATBufferMin)
-        {
-            setCurrentValuesToEasyCATBufferMin = timeLog[i].setCurrentValuesToEasyCATBuffer;
-        }
-
-        if (timeLog[i].loadRxQueue > 0 && timeLog[i].loadRxQueue < loadRxQueueMin)
-        {
-            loadRxQueueMin = timeLog[i].loadRxQueue;
-        }
-
-        if (timeLog[i].easyCATReadTaskTotal > 0 && timeLog[i].easyCATReadTaskTotal < easyCatReadTaskTotalMin)
-        {
-            easyCatReadTaskTotalMin = timeLog[i].easyCATReadTaskTotal;
-        }
-
-        if (timeLog[i].easyCATWriteTaskTotal > 0 && timeLog[i].easyCATWriteTaskTotal < easyCatWriteTaskTotalMin)
-        {
-            easyCatWriteTaskTotalMin = timeLog[i].easyCATWriteTaskTotal;
-        }
-
-        if (timeLog[i].canfdReadTaskTotal > 0 && timeLog[i].canfdReadTaskTotal < canfdReadTaskTotalMin)
-        {
-            canfdReadTaskTotalMin = timeLog[i].canfdReadTaskTotal;
-        }
-
-        if (timeLog[i].canfdWriteTaskTotal > 0 && timeLog[i].canfdWriteTaskTotal < canfdWriteTaskTotalMin)
-        {
-            canfdWriteTaskTotalMin = timeLog[i].canfdWriteTaskTotal;
-        }
-
-        if (timeLog[i].easyCATRead > easyCATReadMax)
-        {
-            easyCATReadMax = timeLog[i].easyCATRead;
-        }
-
-        if (timeLog[i].easyCATWrite > easyCATWriteMax)
-        {
-            easyCATWriteMax = timeLog[i].easyCATWrite;
-        }
-
-        if (timeLog[i].loadTargetValuesFromEtherCAT > loadTargetValuesFromEtherCATMax)
-        {
-            loadTargetValuesFromEtherCATMax = timeLog[i].loadTargetValuesFromEtherCAT;
-        }
-
-        if (timeLog[i].motorControl > motorControlMax)
-        {
-            motorControlMax = timeLog[i].motorControl;
-        }
-
-        if (timeLog[i].loadCurrentValuesFromMotorDrivers > loadCurrentValuesFromMotorDriversMax)
-        {
-            loadCurrentValuesFromMotorDriversMax = timeLog[i].loadCurrentValuesFromMotorDrivers;
-        }
-
-        if (timeLog[i].setCurrentValuesToEasyCATBuffer > setCurrentValuesToEasyCATBufferMax)
-        {
-            setCurrentValuesToEasyCATBufferMax = timeLog[i].setCurrentValuesToEasyCATBuffer;
-        }
-
-        if (timeLog[i].loadRxQueue > loadRxQueueMax)
-        {
-            loadRxQueueMax = timeLog[i].loadRxQueue;
-        }
-
-        if (timeLog[i].easyCATReadTaskTotal > easyCatReadTaskTotalMax)
-        {
-            easyCatReadTaskTotalMax = timeLog[i].easyCATReadTaskTotal;
-        }
-
-        if (timeLog[i].easyCATWriteTaskTotal > easyCatWriteTaskTotalMax)
-        {
-            easyCatWriteTaskTotalMax = timeLog[i].easyCATWriteTaskTotal;
-        }
-
-        if (timeLog[i].canfdReadTaskTotal > canfdReadTaskTotalMax)
-        {
-            canfdReadTaskTotalMax = timeLog[i].canfdReadTaskTotal;
-        }
-
-        if (timeLog[i].canfdWriteTaskTotal > canfdWriteTaskTotalMax)
-        {
-            canfdWriteTaskTotalMax = timeLog[i].canfdWriteTaskTotal;
-        }
-
-    }
-    int64_t easyCATReadAvg = easyCATReadSum / (size);
-    int64_t easyCATWriteAvg = easyCATWriteSum / (size);
-    int64_t loadTargetValuesFromEtherCATAvg = loadTargetValuesFromEtherCATSum / size;
-    int64_t motorControlAvg = motorControlSum / size;
-    int64_t loadCurrentValuesFromMotorDriversAvg = loadCurrentValuesFromMotorDriversSum / size;
-    int64_t setCurrentValuesToEasyCATBufferAvg = setCurrentValuesToEasyCATBufferSum / size;
-    int64_t loadRxQueueAvg = loadRxQueueSum / size;
-    int64_t easyCatReadTaskTotalAvg = easyCatReadTaskTotalSum / size;
-    int64_t easyCatWriteTaskTotalAvg = easyCatWriteTaskTotalSum / size;
-    int64_t canfdReadTaskTotalAvg = canfdReadTaskTotalSum / size;
-    int64_t canfdWriteTaskTotalAvg = canfdWriteTaskTotalSum / size;
-
-    stats.average.easyCATRead = easyCATReadAvg;
-    stats.average.easyCATWrite = easyCATWriteAvg;
-    stats.average.loadTargetValuesFromEtherCAT = loadTargetValuesFromEtherCATAvg;
-    stats.average.motorControl = motorControlAvg;
-    stats.average.loadCurrentValuesFromMotorDrivers = loadCurrentValuesFromMotorDriversAvg;
-    stats.average.setCurrentValuesToEasyCATBuffer = setCurrentValuesToEasyCATBufferAvg;
-    stats.average.loadRxQueue = loadRxQueueAvg;
-    stats.average.easyCATReadTaskTotal = easyCatReadTaskTotalAvg;
-    stats.average.easyCATWriteTaskTotal = easyCatWriteTaskTotalAvg;
-    stats.average.canfdReadTaskTotal = canfdReadTaskTotalAvg;
-    stats.average.canfdWriteTaskTotal = canfdWriteTaskTotalAvg;
-
-    stats.min.easyCATRead = easyCATReadMin;
-    stats.min.easyCATWrite = easyCATWriteMin;
-    stats.min.loadTargetValuesFromEtherCAT = loadTargetValuesFromEtherCATMin;
-    stats.min.motorControl = motorControlMin;
-    stats.min.loadCurrentValuesFromMotorDrivers = loadCurrentValuesFromMotorDriversMin;
-    stats.min.setCurrentValuesToEasyCATBuffer = setCurrentValuesToEasyCATBufferMin;
-    stats.min.loadRxQueue = loadRxQueueMin;
-    stats.min.easyCATReadTaskTotal = easyCatReadTaskTotalMin;
-    stats.min.easyCATWriteTaskTotal = easyCatWriteTaskTotalMin;
-    stats.min.canfdReadTaskTotal = canfdReadTaskTotalMin;
-    stats.min.canfdWriteTaskTotal = canfdWriteTaskTotalMin;
-
-    stats.max.easyCATRead = easyCATReadMax;
-    stats.max.easyCATWrite = easyCATWriteMax;
-    stats.max.loadTargetValuesFromEtherCAT = loadTargetValuesFromEtherCATMax;
-    stats.max.motorControl = motorControlMax;
-    stats.max.loadCurrentValuesFromMotorDrivers = loadCurrentValuesFromMotorDriversMax;
-    stats.max.setCurrentValuesToEasyCATBuffer = setCurrentValuesToEasyCATBufferMax;
-    stats.max.loadRxQueue = loadRxQueueMax;
-    stats.max.easyCATReadTaskTotal = easyCatReadTaskTotalMax;
-    stats.max.easyCATWriteTaskTotal = easyCatWriteTaskTotalMax;
-    stats.max.canfdReadTaskTotal = canfdReadTaskTotalMax;
-    stats.max.canfdWriteTaskTotal = canfdWriteTaskTotalMax;
-
-    stats.easyCATReadTaskOverflowCount = easyCATReadTaskOverflowCount;
-    stats.easyCATWriteTaskOverflowCount = easyCATWriteTaskOverflowCount;
-    stats.canfdReadTaskOverflowCount = canfdReadTaskOverflowCount;
-    stats.canfdWriteTaskOverflowCount = canfdWriteTaskOverflowCount;    
-
-    return stats;
-}
 
 
 bool easyCATSetup()
@@ -553,219 +276,75 @@ bool easyCATSetup()
     return success;
 }
 
-bool motorDriverSetup()
-{
-        vTaskDelay(100 / portTICK_PERIOD_MS);
-        bool all_drivers_connected = false;
-        uint8_t retry_count = 5;
-        while (!all_drivers_connected)
-        {
-            uint8_t connected_count = 0;
-            for (const auto& pair : motor_drivers_map)
-            {
-                uint8_t module_id = pair.first;
-                // verify all motor drivers are connected
-                bool connection_state = motor_drivers_map.at(module_id).getConnectionState();
-                motor_driver_connection_states_map[module_id] = connection_state;
-                if (connection_state) {
-                    Serial.printf("Motor driver %d connected\n", module_id);
-                    connected_count++;
-                    continue;
-                } else 
-                {
-                    vTaskDelay(100 / portTICK_PERIOD_MS);
-                    motor_drivers_map.at(module_id).setConnectionOnline();
-                    vTaskDelay(1000 / portTICK_PERIOD_MS);
-                }
-            }
-            if (connected_count == motor_drivers_map.size())
-            {
-                Serial.println("All motor drivers connected");
-                all_drivers_connected = true;
-                break;
-            }
-            retry_count--;
-            if (retry_count == 0)
-            {
-                Serial.println("Motor driver connection failed");
-                for (const auto& pair : motor_drivers_map)
-                {
-                    uint8_t module_id = pair.first;
-                    Serial.printf("Motor driver connection state: %d\n", motor_driver_connection_states_map[module_id]);
-                }
-                while (1)
-                {
-                    vTaskDelay(1000 / portTICK_PERIOD_MS);
-                }
-                break;
-            }   
-            //vTaskDelay(1000 / portTICK_PERIOD_MS);
-            //Serial.printf("Retry count %d\n", retry_count);
-        }
-
-        vTaskDelay(200 / portTICK_PERIOD_MS);
-        // check driver error
-        for (const auto& pair : motor_drivers_map)
-        {
-            uint8_t module_id = pair.first;
-            motor_drivers_map.at(module_id).loadCurrentState();
-        }
-        vTaskDelay(200 / portTICK_PERIOD_MS);
-        ESP_LOGI("MotorDriver", "Checking driver error");
-        bool all_drivers_error_free = true;
-        for (const auto& pair : motor_drivers_map)
-        {
-            uint8_t module_id = pair.first;
-            uint16_t error_state = motor_drivers_map.at(module_id).getErrorState();
-            ESP_LOGE("MotorDriver","Error state %d: 0x%04X", module_id, error_state);
-            if (error_state != 0)
-            {
-                all_drivers_error_free = false;
-            }
-        }
-        if (!all_drivers_error_free)
-        {
-            ESP_LOGE("MotorDriver","Motor driver error detected");
-            ESP_LOGE("MotorDriver","Resetting motor drivers");
-            for (const auto& pair : motor_drivers_map)
-            {
-                uint8_t module_id = pair.first;
-                motor_drivers_map.at(module_id).setDriverDisabled();
-                vTaskDelay(100 / portTICK_PERIOD_MS);
-                motor_drivers_map.at(module_id).clearJointError();
-                vTaskDelay(100 / portTICK_PERIOD_MS);
-                motor_drivers_map.at(module_id).setDriverEnabled();
-                vTaskDelay(100 / portTICK_PERIOD_MS);
-            }
-            // check driver error
-            for (const auto& pair : motor_drivers_map)
-            {
-                uint8_t module_id = pair.first;
-                motor_drivers_map.at(module_id).loadCurrentState();
-            }
-            vTaskDelay(200 / portTICK_PERIOD_MS);
-            for (const auto& pair : motor_drivers_map)
-            {
-                uint8_t module_id = pair.first;
-                uint16_t error_state = motor_drivers_map.at(module_id).getErrorState();
-                ESP_LOGI("MotorDriver","Error state %d: 0x%04X\n", module_id, error_state);
-            }
-            while (1)
-            {
-                vTaskDelay(1000 / portTICK_PERIOD_MS);
-            }
-        }
-
-        ESP_LOGI("MotorDriver", "Setting control mode");
-
-        for (const auto& pair : motor_drivers_map)
-        {
-            uint8_t module_id = pair.first;
-            auto driver = motor_drivers_map.at(module_id);
-            auto control_mode = driver.getControlMode();
-            ESP_LOGI("MotorDriver", "Control mode %d: %d", module_id, control_mode);
-            driver.setControlMode(control_mode);
-            vTaskDelay(100 / portTICK_PERIOD_MS);
-            //motor_drivers[i].setDriverEnabled();
-            //vTaskDelay(100 / portTICK_PERIOD_MS);
-        }
-
-        ESP_LOGI("MotorDriver", "Motor driver setup completed");
-    return true;
-}
-
-//void canfd_receive_task(void *pvParameters)
-//{
-//    TickType_t last_wdt_reset = xTaskGetTickCount();
-//    //const TickType_t wdt_reset_period = pdMS_TO_TICKS(1000); 
-//    while (1)
-//    {
-//        CAN_FRAME_FD rxFrame;
-//        if (CAN1.readFD(rxFrame))
-//        {
-//            uint8_t module_id = (rxFrame.id & 0x00FF);
-//            //Serial.printf("Received Module ID: 0x%02X\n", module_id);
-//            motor_drivers[module_id - 1].processCANFDMessage(rxFrame);
-//            canfd_receive_count++;
-//            //Serial.printf("ID: 0x%04X\n", rxFrame.id);
-//            //for (int i = 0; i < rxFrame.length; i++)
-//            //{
-//            //    Serial.printf("0x%02X ", rxFrame.data.uint8[i]);
-//            //}
-//            //Serial.printf("\n");
-//        }
-//        vTaskDelayUntil(&last_wdt_reset, 1 / portTICK_PERIOD_MS);
-//        //vTaskDelay(1 / portTICK_PERIOD_MS);
-//        //TickType_t now = xTaskGetTickCount();
-//        //if ((now - last_wdt_reset) >= wdt_reset_period)
-//        //{
-//        //    vTaskDelay(1 / portTICK_PERIOD_MS);
-//        //    last_wdt_reset = now;
-//        //    uint16_t rx_queue_available = CAN1.available();
-//        //    ESP_LOGI("Queue", "RX Queue available: %u", rx_queue_available);
-//
-//        //    // オプション: リセットしたことをログに記録
-//        //    //ESP_LOGI("WDT", "WDT reset at %llu ms", (uint64_t)now * portTICK_PERIOD_MS);
-//        //}
-//    }
-//}
-
-void sendControlTicMessage() {
-    CAN_FRAME_FD control_tic_message;
-    control_tic_message.id = 0x7F0;
-    control_tic_message.fdMode = 1;
-    control_tic_message.rrs = 0;
-    control_tic_message.length = 0;
-    CAN1.WriteFrame(control_tic_message);
-}
-
-void loadCurrentPosition()
-{
-    for (const auto& pair : motor_drivers_map)
-    {
-        uint8_t module_id = pair.first;
-        motor_drivers_map.at(module_id).loadCurrentPosition();
-        canfd_send_count++;
-        canfd_send_counts_map[module_id]++;
-    }
-
-}
 
 void motorControl()
 {
-    motor_control_count++;
-    // motor_drivers_mapでループ
+    Logger::motor_control_count++;
+    for (auto const &tuple : module_id_index_map)
+    {
+        uint8_t module_id = tuple.first;
+        uint8_t index = tuple.second;
+        ControlWord control_word;
+        control_word.word = control_words[index];
 
-
-
-
-
-    // 以下は使わない
-    //for (uint8_t module_id : USED_MODULE_IDS)
-    //{
-    //    if (CONTROL_MODE == RMTR_SERVO_MODE_POS)
-    //    {
-    //        // Serial.printf("Target position %d: %d\n", i, target_positions[i]);
-    //        motor_drivers_map.at(module_id).setTargetPosition(target_positions_map.at(module_id));
-    //        canfd_send_count++;
-    //        canfd_send_counts_map[module_id]++;
-    //    }
-    //    else if (CONTROL_MODE == RMTR_SERVO_MODE_VEL)
-    //    {
-    //        // Serial.printf("Target velocity %d: %d\n", i, target_velocities[i]);
-    //        motor_drivers_map.at(module_id).setTargetVelocity(target_velocities_map.at(module_id));
-    //        canfd_send_count++;
-    //        canfd_send_counts_map[module_id]++;
-    //    }
-    //    else if (CONTROL_MODE == RMTR_SERVO_MODE_CUR)
-    //    {
-    //        motor_drivers_map.at(module_id).setTargetCurrent(target_torques_map.at(module_id));
-    //        canfd_send_count++;
-    //        canfd_send_counts_map[module_id]++;
-    //        // Serial.printf("Target torque %d: %d\n", i, target_torques[i]);
-    //    }
-    //    ets_delay_us(50);
-    //}
+        uint8_t control_mode = control_word.bits.control_mode;
+        uint8_t control_state = control_word.bits.control_state;
+        ControllerState state = static_cast<ControllerState>(control_state);
+        bool control_enable = control_word.bits.enable;
+        if (!control_enable) {
+            continue;
+        }
+        switch(state) {
+            case ControllerState::STARTING:
+                break;
+            case ControllerState::INITIALIZING:
+                motor_driver.writeConnectionOnline(module_id);
+                Logger::canfd_send_count++;
+                canfd_send_counts[index]++;
+                break;
+            case ControllerState::CONNECTION_WAITING:
+                break;
+            case ControllerState::INITIAL_MODE_SETTING:
+            case ControllerState::MODE_CHANGING:
+                motor_driver.writeControlMode(module_id, control_mode);
+                Logger::canfd_send_count++;
+                canfd_send_counts[index]++;
+                break;
+            case ControllerState::IDLING:
+                motor_driver.readCurrentState(module_id);
+                Logger::canfd_send_count++;
+                canfd_send_counts[index]++;
+                break;
+            case ControllerState::HOMING:
+            case ControllerState::STOPPING:
+            case ControllerState::CONTROLLING:
+                if (control_mode == 3)
+                {
+                    motor_driver.writeTargetPosition(module_id, target_positions[index]);
+                    Logger::canfd_send_count++;
+                    canfd_send_counts[index]++;
+                }
+                else if (control_mode == 2)
+                {
+                    motor_driver.writeTargetVelocity(module_id, target_velocities[index]);
+                    Logger::canfd_send_count++;
+                    canfd_send_counts[index]++;
+                }
+                else if (control_mode == 1)
+                {
+                    motor_driver.writeTargetCurrent(module_id, target_currents[index]);
+                    Logger::canfd_send_count++;
+                    canfd_send_counts[index]++;
+                }
+                break;
+            case ControllerState::ENABLING:
+                motor_driver.writeDriverEnabled(module_id);
+                Logger::canfd_send_count++;
+                canfd_send_counts[index]++;
+                break;
+        }
+        ets_delay_us(50);
+    }
     
 }
 
@@ -773,7 +352,7 @@ void canfdReadTask(void *pvParameters) {
     while (1)
     {
         ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
-        timeLog[timeLogIndex].loadRxQueue = measureTime(loadRxQueue);
+        Logger::timeLog[Logger::timeLogIndex].loadRxQueue = measureTime(loadRxQueue);
     }
 }
 
@@ -781,7 +360,7 @@ void canfdWriteTask(void *pvParameters) {
     while (1)
     {
         ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
-        timeLog[timeLogIndex].motorControl = measureTime(motorControl);
+        Logger::timeLog[Logger::timeLogIndex].motorControl = measureTime(motorControl);
     }
 }
 
@@ -821,11 +400,11 @@ void sendEtherCATDataAsCANFD(const PROCBUFFER_OUT& ethercat_data, uint32_t canId
         data_size += vel_size;
     }
 
-    // Copy torque data if there's space
+    // Copy current data if there's space
     if (data_size < max_data_size) {
-        size_t torque_size = std::min(max_data_size - data_size, 8 * sizeof(int32_t));
-        memcpy(response.data.uint8 + data_size, &ethercat_data.Cust.Torque_1, torque_size);
-        data_size += torque_size;
+        size_t current_size = std::min(max_data_size - data_size, 8 * sizeof(int32_t));
+        memcpy(response.data.uint8 + data_size, &ethercat_data.Cust.Torque_1, current_size);
+        data_size += current_size;
     }
 
     // Copy control words if there's space (assuming little-endian system)
@@ -841,83 +420,30 @@ void sendEtherCATDataAsCANFD(const PROCBUFFER_OUT& ethercat_data, uint32_t canId
     CAN1.WriteFrame(response);
 }
 
+
+
 void canfdHealthCheckTask(void *pvParameters) {
     // 送信カウント数と受信カウント数を1秒ごとに比較
     while (1) {
-        //ESP_LOGI("main", "EasyCAT count: %u", easycat_count);
-        //ESP_LOGI("main", "Motor control count: %u", motor_control_count);
-        //ESP_LOGI("main", "Send count: %u, Receive count: %u", canfd_send_count, canfd_receive_count);
-        for (const auto& pair : motor_drivers_map)
-        {
-            uint8_t module_id = pair.first;
-            ESP_LOGI("main", "module_id: %d, Send count: %u, Receive count: %u", module_id, canfd_send_counts_map.at(module_id), canfd_receive_counts_map.at(module_id));
-            ESP_LOGI("main", "id %d, target p: %d, v: %d, c: %d, cw: %d", module_id, target_positions_map.at(module_id), target_velocities_map.at(module_id), target_torques_map.at(module_id), control_words_map.at(module_id));
-        }
-        //ESP_LOGI("EasyCAT", "Cust.Position 1: %d, 2: %d, 3: %d, 4: %d, 5: %d, 6: %d, 7: %d, 8: %d", EasyCAT_BufferOut.Cust.Position_1, EasyCAT_BufferOut.Cust.Position_2, EasyCAT_BufferOut.Cust.Position_3, EasyCAT_BufferOut.Cust.Position_4, EasyCAT_BufferOut.Cust.Position_5, EasyCAT_BufferOut.Cust.Position_6, EasyCAT_BufferOut.Cust.Position_7, EasyCAT_BufferOut.Cust.Position_8);
-        //ESP_LOGI("EasyCAT", "Cust.Velocity 1: %d, 2: %d, 3: %d, 4: %d, 5: %d, 6: %d, 7: %d, 8: %d", EasyCAT_BufferOut.Cust.Velocity_1, EasyCAT_BufferOut.Cust.Velocity_2, EasyCAT_BufferOut.Cust.Velocity_3, EasyCAT_BufferOut.Cust.Velocity_4, EasyCAT_BufferOut.Cust.Velocity_5, EasyCAT_BufferOut.Cust.Velocity_6, EasyCAT_BufferOut.Cust.Velocity_7, EasyCAT_BufferOut.Cust.Velocity_8);
-        //ESP_LOGI("EasyCAT", "Cust.Torque 1: %d, 2: %d, 3: %d, 4: %d, 5: %d, 6: %d, 7: %d, 8: %d", EasyCAT_BufferOut.Cust.Torque_1, EasyCAT_BufferOut.Cust.Torque_2, EasyCAT_BufferOut.Cust.Torque_3, EasyCAT_BufferOut.Cust.Torque_4, EasyCAT_BufferOut.Cust.Torque_5, EasyCAT_BufferOut.Cust.Torque_6, EasyCAT_BufferOut.Cust.Torque_7, EasyCAT_BufferOut.Cust.Torque_8);
-        //ESP_LOGI("EasyCAT", "Cust.ControlWord 1: %d, 2: %d, 3: %d, 4: %d, 5: %d, 6: %d, 7: %d, 8: %d", EasyCAT_BufferOut.Cust.ControlWord_1, EasyCAT_BufferOut.Cust.ControlWord_2, EasyCAT_BufferOut.Cust.ControlWord_3, EasyCAT_BufferOut.Cust.ControlWord_4, EasyCAT_BufferOut.Cust.ControlWord_5, EasyCAT_BufferOut.Cust.ControlWord_6, EasyCAT_BufferOut.Cust.ControlWord_7, EasyCAT_BufferOut.Cust.ControlWord_8);
-        //ESP_LOGI("main", "RX Queue count: %u", rx_queue_count);
-        //ESP_LOGI("CANFD", "int_pin_count: %u", CAN1.int_pin_count);
-        //ESP_LOGI("CANFD", "task_MCPIntFD count: %u", CAN1.task_MCPIntFD_count);
-        //ESP_LOGI("CANFD", "INT Handler count: %u", CAN1.int_handler_count);
-        //ESP_LOGI("CANFD", "Handle dispatch count: %u", CAN1.handle_dispatch_count);
-        //ESP_LOGI("CANFD", "RX Queue count: %u", CAN1.rx_queue_count);
-        //ESP_LOGI("CANFD", "RX Queue available: %u", CAN1.available());
-        //ESP_LOGI("CANFD", "Send count: %u", CAN1.send_count);
-        //ESP_LOGE("CANFD", "Receive error count: %u", CAN1.receiveErrorCount);
-        //ESP_LOGE("CANFD", "Transmit error count: %u", CAN1.transmitErrorCount);
-        //ESP_LOGE("CANFD", "ErrorRegister: 0x%08X", CAN1.transmitRecceiveErrorCountResister);
-        //ESP_LOGI("CANFD", "Interrupt code: 0x%08X", CAN1.interruptCode);
-        //ESP_LOGI("CANFD", "Fifo status: 0x%08X", CAN1.fifoStatus);
-        //ESP_LOGI("CANFD", "Receive overflow interrupt status: 0x%08X", CAN1.receiveOverflowInterruptStatus);
-        //ESP_LOGE("CANFD", "CRC 0x%08X", CAN1.crc);
-        //ESP_LOGI("CANFD", "CiINT: 0x%08X", CAN1.ci_int);
-        //ESP_LOGI("CANFD", "Int flag log index: %u\n", CAN1.intFlagLogIndex);
-        ////for (int i = 0; i < CAN1.intFlagLogIndex; i++)
-        ////{
-        ////    ESP_LOGI("CANFD","0x%08X", CAN1.intFlagLog[i]);
-        ////    ESP_LOGI("CANFD","CiCON 0x%08X", CAN1.ciConLog[i]);
-        ////}
+        
+        //for (int i = 0; i < CAN1.intFlagLogIndex; i++)
+        //{
+        //    ESP_LOGI("CANFD","0x%08X", CAN1.intFlagLog[i]);
+        //    ESP_LOGI("CANFD","CiCON 0x%08X", CAN1.ciConLog[i]);
+        //}
+        Logger::consoleLog(
+            CAN1,
+            canfd_send_counts,
+            canfd_receive_counts,
+            module_id_index_map,
+            control_words,
+            status_words,
+            target_positions,
+            actual_positions
+        );
 
-        //TimeLogStats stats = calcStats();
-        //ESP_LOGI("Stats", "EasyCAT read time: min %lld us, max %lld us, avg %lld us", stats.min.easyCATRead, stats.max.easyCATRead, stats.average.easyCATRead);
-        //ESP_LOGI("Stats", "EasyCAT write time: min %lld us, max %lld us, avg %lld us", stats.min.easyCATWrite, stats.max.easyCATWrite, stats.average.easyCATWrite);
-        //ESP_LOGI("Stats", "Load target values from EtherCAT time: min %lld us, max %lld us, avg %lld us", stats.min.loadTargetValuesFromEtherCAT, stats.max.loadTargetValuesFromEtherCAT, stats.average.loadTargetValuesFromEtherCAT);
-        //ESP_LOGI("Stats", "Motor control time: min %lld us, max %lld us, avg %lld us", stats.min.motorControl, stats.max.motorControl, stats.average.motorControl);
-        //ESP_LOGI("Stats", "Load current values from motor drivers time: min %lld us, max %lld us, avg %lld us", stats.min.loadCurrentValuesFromMotorDrivers, stats.max.loadCurrentValuesFromMotorDrivers, stats.average.loadCurrentValuesFromMotorDrivers);
-        //ESP_LOGI("Stats", "Set current values to EasyCAT buffer time: min %lld us, max %lld us, avg %lld us", stats.min.setCurrentValuesToEasyCATBuffer, stats.max.setCurrentValuesToEasyCATBuffer, stats.average.setCurrentValuesToEasyCATBuffer);
-        //ESP_LOGI("Stats", "Load RX queue time: min %lld us, max %lld us, avg %lld us", stats.min.loadRxQueue, stats.max.loadRxQueue, stats.average.loadRxQueue);
-        //ESP_LOGI("Stats", "EasyCAT read task total time: min %lld us, max %lld us, avg %lld us", stats.min.easyCATReadTaskTotal, stats.max.easyCATReadTaskTotal, stats.average.easyCATReadTaskTotal);
-        //ESP_LOGI("Stats", "EasyCAT write task total time: min %lld us, max %lld us, avg %lld us", stats.min.easyCATWriteTaskTotal, stats.max.easyCATWriteTaskTotal, stats.average.easyCATWriteTaskTotal);
-        //ESP_LOGI("Stats", "CANFD read task total time: min %lld us, max %lld us, avg %lld us", stats.min.canfdReadTaskTotal, stats.max.canfdReadTaskTotal, stats.average.canfdReadTaskTotal);
-        //ESP_LOGI("Stats", "CANFD write task total time: min %lld us, max %lld us, avg %lld us", stats.min.canfdWriteTaskTotal, stats.max.canfdWriteTaskTotal, stats.average.canfdWriteTaskTotal);
-        //ESP_LOGI("Stats", "EasyCAT read task overflow count: %u", stats.easyCATReadTaskOverflowCount);
-        //ESP_LOGI("Stats", "EasyCAT write task overflow count: %u", stats.easyCATWriteTaskOverflowCount);
-        //ESP_LOGI("Stats", "CANFD read task overflow count: %u", stats.canfdReadTaskOverflowCount);
-        //ESP_LOGI("Stats", "CANFD write task overflow count: %u", stats.canfdWriteTaskOverflowCount);
-
-        // カウント数をリセット
-        motor_control_count = 0;
-        canfd_send_count = 0;
-        for (const auto& pair : motor_drivers_map)
-        {
-            uint8_t module_id = pair.first;
-            canfd_send_counts_map[module_id] = 0;
-            canfd_receive_counts_map[module_id] = 0;
-        }
-        canfd_receive_count = 0;
-        rx_queue_count = 0;
-        easycat_count = 0;
-        timeLogIndex = 0;
-
-        CAN1.task_MCPIntFD_count = 0;
-        CAN1.int_handler_count = 0;
-        CAN1.handle_dispatch_count = 0;
-        CAN1.rx_queue_count = 0;
-        CAN1.intFlagLogIndex = 0;
-        CAN1.send_count = 0;
-        CAN1.int_pin_count = 0;
+        
+        
 
         // 1秒待機
         vTaskDelay(1000 / portTICK_PERIOD_MS);
@@ -925,163 +451,156 @@ void canfdHealthCheckTask(void *pvParameters) {
     
 }
 
-void setup()
+void loadControlWordsFromEtherCAT()
 {
+    for (int i = 0; i < control_words.size(); i++)
+    {
+        uint16_t control_word = control_words[i];
+        ControlWord cw;
+        cw.word = control_word;
+        uint8_t module_id = cw.bits.module_id;
+        module_id_index_map.emplace(module_id, i);
+    }
 
 }
 
 void loadTargetValuesFromEtherCAT()
 {
-    for (int i = 0; i < 8; i++)
+
+    // moddule_id_index_mapに基づいて、EasyCATバッファからターゲット値をロード
+    for (int i = 0 ; i < MAX_MODULE_SIZE; i++)
     {
-        double target_position = 0;
-        double target_velocity = 0;
-        double target_torque = 0;
-        realman_motor_driver::ControlWord control_word;
-        switch(i) {
+        //uint8_t index = module_id_index[index];
+        int32_t target_position = 0;
+        int32_t target_velocity = 0;
+        int32_t target_current = 0;
+        uint16_t control_word = 0;
+        switch (i)
+        {
         case 0:
             target_position = EasyCAT_BufferOut.Cust.Position_1;
             target_velocity = EasyCAT_BufferOut.Cust.Velocity_1;
-            target_torque = EasyCAT_BufferOut.Cust.Torque_1;
-            control_word.word = EasyCAT_BufferOut.Cust.ControlWord_1;
+            target_current = EasyCAT_BufferOut.Cust.Torque_1;
+            control_word = EasyCAT_BufferOut.Cust.ControlWord_1;
             break;
         case 1:
             target_position = EasyCAT_BufferOut.Cust.Position_2;
             target_velocity = EasyCAT_BufferOut.Cust.Velocity_2;
-            target_torque = EasyCAT_BufferOut.Cust.Torque_2;
-            control_word.word = EasyCAT_BufferOut.Cust.ControlWord_2;
+            target_current = EasyCAT_BufferOut.Cust.Torque_2;
+            control_word = EasyCAT_BufferOut.Cust.ControlWord_2;
             break;
         case 2:
             target_position = EasyCAT_BufferOut.Cust.Position_3;
             target_velocity = EasyCAT_BufferOut.Cust.Velocity_3;
-            target_torque = EasyCAT_BufferOut.Cust.Torque_3;
-            control_word.word = EasyCAT_BufferOut.Cust.ControlWord_3;
+            target_current = EasyCAT_BufferOut.Cust.Torque_3;
+            control_word = EasyCAT_BufferOut.Cust.ControlWord_3;
             break;
         case 3:
             target_position = EasyCAT_BufferOut.Cust.Position_4;
             target_velocity = EasyCAT_BufferOut.Cust.Velocity_4;
-            target_torque = EasyCAT_BufferOut.Cust.Torque_4;
-            control_word.word = EasyCAT_BufferOut.Cust.ControlWord_4;
+            target_current = EasyCAT_BufferOut.Cust.Torque_4;
+            control_word = EasyCAT_BufferOut.Cust.ControlWord_4;
             break;
         case 4:
             target_position = EasyCAT_BufferOut.Cust.Position_5;
             target_velocity = EasyCAT_BufferOut.Cust.Velocity_5;
-            target_torque = EasyCAT_BufferOut.Cust.Torque_5;
-            control_word.word = EasyCAT_BufferOut.Cust.ControlWord_5;
+            target_current = EasyCAT_BufferOut.Cust.Torque_5;
+            control_word = EasyCAT_BufferOut.Cust.ControlWord_5;
             break;
         case 5:
             target_position = EasyCAT_BufferOut.Cust.Position_6;
             target_velocity = EasyCAT_BufferOut.Cust.Velocity_6;
-            target_torque = EasyCAT_BufferOut.Cust.Torque_6;
-            control_word.word = EasyCAT_BufferOut.Cust.ControlWord_6;
+            target_current = EasyCAT_BufferOut.Cust.Torque_6;
+            control_word = EasyCAT_BufferOut.Cust.ControlWord_6;
             break;
         case 6:
             target_position = EasyCAT_BufferOut.Cust.Position_7;
             target_velocity = EasyCAT_BufferOut.Cust.Velocity_7;
-            target_torque = EasyCAT_BufferOut.Cust.Torque_7;
-            control_word.word = EasyCAT_BufferOut.Cust.ControlWord_7;
+            target_current = EasyCAT_BufferOut.Cust.Torque_7;
+            control_word = EasyCAT_BufferOut.Cust.ControlWord_7;
             break;
         case 7:
             target_position = EasyCAT_BufferOut.Cust.Position_8;
             target_velocity = EasyCAT_BufferOut.Cust.Velocity_8;
-            target_torque = EasyCAT_BufferOut.Cust.Torque_8;
-            control_word.word = EasyCAT_BufferOut.Cust.ControlWord_8;
+            target_current = EasyCAT_BufferOut.Cust.Torque_8;
+            control_word = EasyCAT_BufferOut.Cust.ControlWord_8;
             break;
         }
-        uint8_t module_id = control_word.bits.module_id;
-        
-        target_positions_map[module_id] = target_position;
-        target_velocities_map[module_id] = target_velocity;
-        target_torques_map[module_id] = target_torque;
-        control_words_map[module_id] = control_word.word;
+
+        target_positions[i] = target_position;
+        target_velocities[i] = target_velocity;
+        target_currents[i] = target_current;
+        control_words[i] = control_word;
     }
 }
 
-// load current values from motor drivers
-void loadCurrentValuesFromMotorDrivers() {
-    for (const auto& pair : motor_drivers_map) {
-        uint8_t module_id = pair.first;
-        //actual_positions[module_id] = (int32_t)(motor_drivers_map.at(module_id).getCurrentPosition());
-        actual_positions_map[module_id] = (int32_t)(motor_drivers_map.at(module_id).getCurrentPosition());
-        //actual_torques[module_id] = (int32_t)(motor_drivers_map.at(module_id).getCurrentTorque());
-        actual_torques_map[module_id] = (int32_t)(motor_drivers_map.at(module_id).getCurrentTorque());
-        //actual_velocities[module_id] = (int32_t)(motor_drivers_map.at(module_id).getCurrentVelocity());
-        actual_velocities_map[module_id] = (int32_t)(motor_drivers_map.at(module_id).getCurrentVelocity());
-        status_words_map[module_id] = motor_drivers_map.at(module_id).getStatusWord().word;
-    }
-}
+
 
 // set current values to EasyCAT buffer
 void setCurrentValuesToEasyCATBuffer() {
-    if (module_id_to_easycat_index_map.size() == 0)
+    for (auto const &tuple : module_id_index_map)
     {
-        return;
-    }
-    for (const auto& pair : module_id_to_easycat_index_map) {
-        uint8_t module_id = pair.first;
-        uint8_t index = module_id_to_easycat_index_map.at(module_id);
-        // もしmodule_idが存在しない場合はスキップ
-        if (motor_drivers_map.find(module_id) == motor_drivers_map.end())
-        {
-            continue;
-        }
+        uint8_t module_id = tuple.first;
+        uint8_t index = tuple.second;
         switch(index) {
         case 0:
-            EasyCAT_BufferIn.Cust.ActualPosition_1 = actual_positions_map.at(module_id);
-            EasyCAT_BufferIn.Cust.ActualVelocity_1 = actual_velocities_map.at(module_id);
-            EasyCAT_BufferIn.Cust.ActualTorque_1 = actual_torques_map.at(module_id);
-            EasyCAT_BufferIn.Cust.StatusWord_1 = status_words_map.at(module_id);
+            EasyCAT_BufferIn.Cust.ActualPosition_1 = actual_positions[index];
+            EasyCAT_BufferIn.Cust.ActualVelocity_1 = actual_velocities[index];
+            EasyCAT_BufferIn.Cust.ActualTorque_1 = actual_currents[index];
+            EasyCAT_BufferIn.Cust.StatusWord_1 = status_words[index];
             break;
 
         case 1:
-            EasyCAT_BufferIn.Cust.ActualPosition_2 = actual_positions_map.at(module_id);
-            EasyCAT_BufferIn.Cust.ActualVelocity_2 = actual_velocities_map.at(module_id);
-            EasyCAT_BufferIn.Cust.ActualTorque_2 = actual_torques_map.at(module_id);
-            EasyCAT_BufferIn.Cust.StatusWord_2 = status_words_map.at(module_id);
+            EasyCAT_BufferIn.Cust.ActualPosition_2 = actual_positions[index];
+            EasyCAT_BufferIn.Cust.ActualVelocity_2 = actual_velocities[index];
+            EasyCAT_BufferIn.Cust.ActualTorque_2 = actual_currents[index];
+            EasyCAT_BufferIn.Cust.StatusWord_2 = status_words[index];
             break;
         
         case 2:
-            EasyCAT_BufferIn.Cust.ActualPosition_3 = actual_positions_map.at(module_id);
-            EasyCAT_BufferIn.Cust.ActualVelocity_3 = actual_velocities_map.at(module_id);
-            EasyCAT_BufferIn.Cust.ActualTorque_3 = actual_torques_map.at(module_id);
-            EasyCAT_BufferIn.Cust.StatusWord_3 = status_words_map.at(module_id);
+            EasyCAT_BufferIn.Cust.ActualPosition_3 = actual_positions[index];
+            EasyCAT_BufferIn.Cust.ActualVelocity_3 = actual_velocities[index];
+            EasyCAT_BufferIn.Cust.ActualTorque_3 = actual_currents[index];
+            EasyCAT_BufferIn.Cust.StatusWord_3 = status_words[index];
             break;
 
         case 3:
-            EasyCAT_BufferIn.Cust.ActualPosition_4 = actual_positions_map.at(module_id);
-            EasyCAT_BufferIn.Cust.ActualVelocity_4 = actual_velocities_map.at(module_id);
-            EasyCAT_BufferIn.Cust.ActualTorque_4 = actual_torques_map.at(module_id);
-            EasyCAT_BufferIn.Cust.StatusWord_4 = status_words_map.at(module_id);
+            EasyCAT_BufferIn.Cust.ActualPosition_4 = actual_positions[index];
+            EasyCAT_BufferIn.Cust.ActualVelocity_4 = actual_velocities[index];
+            EasyCAT_BufferIn.Cust.ActualTorque_4 = actual_currents[index];
+            EasyCAT_BufferIn.Cust.StatusWord_4 = status_words[index];
             break;
         
         case 4:
-            EasyCAT_BufferIn.Cust.ActualPosition_5 = actual_positions_map.at(module_id);
-            EasyCAT_BufferIn.Cust.ActualVelocity_5 = actual_velocities_map.at(module_id);
-            EasyCAT_BufferIn.Cust.ActualTorque_5 = actual_torques_map.at(module_id);
-            EasyCAT_BufferIn.Cust.StatusWord_5 = status_words_map.at(module_id);
+            EasyCAT_BufferIn.Cust.ActualPosition_5 = actual_positions[index];
+            EasyCAT_BufferIn.Cust.ActualVelocity_5 = actual_velocities[index];
+            EasyCAT_BufferIn.Cust.ActualTorque_5 = actual_currents[index];
+            EasyCAT_BufferIn.Cust.StatusWord_5 = status_words[index];
             break;
 
         case 5:
-            EasyCAT_BufferIn.Cust.ActualPosition_6 = actual_positions_map.at(module_id);
-            EasyCAT_BufferIn.Cust.ActualVelocity_6 = actual_velocities_map.at(module_id);
-            EasyCAT_BufferIn.Cust.ActualTorque_6 = actual_torques_map.at(module_id);
-            EasyCAT_BufferIn.Cust.StatusWord_6 = status_words_map.at(module_id);
+            EasyCAT_BufferIn.Cust.ActualPosition_6 = actual_positions[index];
+            EasyCAT_BufferIn.Cust.ActualVelocity_6 = actual_velocities[index];
+            EasyCAT_BufferIn.Cust.ActualTorque_6 = actual_currents[index];
+            EasyCAT_BufferIn.Cust.StatusWord_6 = status_words[index];
             break;
         
         case 6:
-            EasyCAT_BufferIn.Cust.ActualPosition_7 = actual_positions_map.at(module_id);
-            EasyCAT_BufferIn.Cust.ActualVelocity_7 = actual_velocities_map.at(module_id);
-            EasyCAT_BufferIn.Cust.ActualTorque_7 = actual_torques_map.at(module_id);
-            EasyCAT_BufferIn.Cust.StatusWord_7 = status_words_map.at(module_id);
+            EasyCAT_BufferIn.Cust.ActualPosition_7 = actual_positions[index];
+            EasyCAT_BufferIn.Cust.ActualVelocity_7 = actual_velocities[index];
+            EasyCAT_BufferIn.Cust.ActualTorque_7 = actual_currents[index];
+            EasyCAT_BufferIn.Cust.StatusWord_7 = status_words[index];
             break;
         
         case 7:
-            EasyCAT_BufferIn.Cust.ActualPosition_8 = actual_positions_map.at(module_id);
-            EasyCAT_BufferIn.Cust.ActualVelocity_8 = actual_velocities_map.at(module_id);
-            EasyCAT_BufferIn.Cust.ActualTorque_8 = actual_torques_map.at(module_id);
-            EasyCAT_BufferIn.Cust.StatusWord_8 = status_words_map.at(module_id);
+            EasyCAT_BufferIn.Cust.ActualPosition_8 = actual_positions[index];
+            EasyCAT_BufferIn.Cust.ActualVelocity_8 = actual_velocities[index];
+            EasyCAT_BufferIn.Cust.ActualTorque_8 = actual_currents[index];
+            EasyCAT_BufferIn.Cust.StatusWord_8 = status_words[index];
             break;
         }
+
+        index++;
     }
 }
 
@@ -1097,98 +616,13 @@ void easyCATWrite()
     EasyCAT_WriteTask();
 }
 
-void initTask(void *pvParameters) {
-    while (1) {
-        ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
-        easyCATRead();
-        if (!INIT_OK) {
-            INITIALIZING = true;
-            ESP_LOGI("EtherCAT", "Initializing motor drivers");
-            detachInterrupt(digitalPinToInterrupt(EASYCAT_INT_PIN));
-        }
-        for (int i = 0; i < 8; i++) {
-            double target_position = 0;
-            double target_velocity = 0;
-            double target_torque = 0;
-            realman_motor_driver::ControlWord control_word;
-            switch (i)
-            {
-            case 0:
-                target_position = EasyCAT_BufferOut.Cust.Position_1;
-                target_velocity = EasyCAT_BufferOut.Cust.Velocity_1;
-                target_torque = EasyCAT_BufferOut.Cust.Torque_1;
-                control_word.word = EasyCAT_BufferOut.Cust.ControlWord_1;
-                break;
-            case 1:
-                target_position = EasyCAT_BufferOut.Cust.Position_2;
-                target_velocity = EasyCAT_BufferOut.Cust.Velocity_2;
-                target_torque = EasyCAT_BufferOut.Cust.Torque_2;
-                control_word.word = EasyCAT_BufferOut.Cust.ControlWord_2;
-                break;
-            case 2:
-                target_position = EasyCAT_BufferOut.Cust.Position_3;
-                target_velocity = EasyCAT_BufferOut.Cust.Velocity_3;
-                target_torque = EasyCAT_BufferOut.Cust.Torque_3;
-                control_word.word = EasyCAT_BufferOut.Cust.ControlWord_3;
-                break;
-            case 3:
-                target_position = EasyCAT_BufferOut.Cust.Position_4;
-                target_velocity = EasyCAT_BufferOut.Cust.Velocity_4;
-                target_torque = EasyCAT_BufferOut.Cust.Torque_4;
-                control_word.word = EasyCAT_BufferOut.Cust.ControlWord_4;
-                break;
-            case 4:
-                target_position = EasyCAT_BufferOut.Cust.Position_5;
-                target_velocity = EasyCAT_BufferOut.Cust.Velocity_5;
-                target_torque = EasyCAT_BufferOut.Cust.Torque_5;
-                control_word.word = EasyCAT_BufferOut.Cust.ControlWord_5;
-                break;
-            case 5:
-                target_position = EasyCAT_BufferOut.Cust.Position_6;
-                target_velocity = EasyCAT_BufferOut.Cust.Velocity_6;
-                target_torque = EasyCAT_BufferOut.Cust.Torque_6;
-                control_word.word = EasyCAT_BufferOut.Cust.ControlWord_6;
-                break;
-            case 6:
-                target_position = EasyCAT_BufferOut.Cust.Position_7;
-                target_velocity = EasyCAT_BufferOut.Cust.Velocity_7;
-                target_torque = EasyCAT_BufferOut.Cust.Torque_7;
-                control_word.word = EasyCAT_BufferOut.Cust.ControlWord_7;
-                break;
-            case 7:
-                target_position = EasyCAT_BufferOut.Cust.Position_8;
-                target_velocity = EasyCAT_BufferOut.Cust.Velocity_8;
-                target_torque = EasyCAT_BufferOut.Cust.Torque_8;
-                control_word.word = EasyCAT_BufferOut.Cust.ControlWord_8;
-                break;
-            }
-            uint8_t module_id = control_word.bits.module_id;
-            // motor_drivers_mapにmodule_idが存在するか確認
-            if ( module_id > 0 && motor_drivers_map.find(module_id) == motor_drivers_map.end())
-            {
-                // なければ追加
-                ESP_LOGI("EtherCAT", "Adding motor driver with module ID %d", module_id);
-                initMotorDriver(module_id, control_word.bits.control_mode);
-                module_id_to_easycat_index_map.emplace(module_id, i);
-            }
-        }
-
-        if (INITIALIZING)
-        {
-            INIT_OK = true;
-            INITIALIZING = false;
-            ESP_LOGI("EtherCAT", "Motor drivers initialized");
-            // 割り込みを有効化
-            attachInterrupt(digitalPinToInterrupt(EASYCAT_INT_PIN), EasyCAT_IntHandler, FALLING);
-        }
-    }
-}
 
 void easyCATReadTask(void *pvParameters) {
     while (1) {
         ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
-        timeLog[timeLogIndex].easyCATRead = measureTime(easyCATRead);
-        timeLog[timeLogIndex].loadTargetValuesFromEtherCAT = measureTime(loadTargetValuesFromEtherCAT);
+        Logger::timeLog[Logger::timeLogIndex].easyCATRead = measureTime(easyCATRead);
+        Logger::timeLog[Logger::timeLogIndex].loadTargetValuesFromEtherCAT = measureTime(loadTargetValuesFromEtherCAT);
+        loadControlWordsFromEtherCAT();
     }
 }
 
@@ -1196,9 +630,8 @@ void easyCATReadTask(void *pvParameters) {
 void easyCATWriteTask(void *pvParameters) {
     while (1) {
         ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
-        timeLog[timeLogIndex].loadCurrentValuesFromMotorDrivers = measureTime(loadCurrentValuesFromMotorDrivers);
-        timeLog[timeLogIndex].setCurrentValuesToEasyCATBuffer = measureTime(setCurrentValuesToEasyCATBuffer);
-        timeLog[timeLogIndex].easyCATWrite = measureTime(easyCATWrite); 
+        Logger::timeLog[Logger::timeLogIndex].setCurrentValuesToEasyCATBuffer = measureTime(setCurrentValuesToEasyCATBuffer);
+        Logger::timeLog[Logger::timeLogIndex].easyCATWrite = measureTime(easyCATWrite); 
     }
 }
 
@@ -1250,8 +683,7 @@ void easyCATWriteTask(void *pvParameters) {
 
 extern "C" void app_main(void)
 {
-    init();
-    //initializeMotorDriversMap();
+    initializeMotorDriversMap();
 
     Serial.begin(115200);
     //CAN1.setDebuggingMode(true);
@@ -1281,18 +713,14 @@ extern "C" void app_main(void)
     CAN1.enableInterrupts = true;
     CAN1.enableListener = true;
 
+    //motorDriverSetup();
 
     ESP_LOGI("main", "Starting EasyCAT task");
     pinMode(EASYCAT_INT_PIN,INPUT_PULLUP);
     CAN1.enableInterrupts = false;
     CAN1.enableListener = false;
 
-
-
-
-
     //xTaskCreatePinnedToCore(canfd_receive_task, "canfd_receive_task", 4096, NULL, 5, NULL, 1);
-    xTaskCreatePinnedToCore(initTask, "init-task", 8192, NULL, 7, &initTaskHandle , 0);
     xTaskCreatePinnedToCore(easyCATReadTask, "easyCAT-read-task", 4096, NULL, 6, &easyCATReadTaskHandle , 0);
     xTaskCreatePinnedToCore(easyCATWriteTask, "easyCAT-write-task", 4096, NULL, 6, &easyCATWriteTaskHandle , 0);
     //xTaskCreatePinnedToCore(canfd_task, "canfd-send-task", 4096, NULL, 5, &canfdTaskHandle , 0);
