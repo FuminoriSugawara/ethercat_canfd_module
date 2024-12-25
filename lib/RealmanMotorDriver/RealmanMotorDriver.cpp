@@ -1,4 +1,5 @@
 #include <cstring>
+#include <cmath>
 #include "RealmanMotorDriver.hpp"
 using namespace realman_motor_driver;
 
@@ -26,7 +27,7 @@ void RealmanMotorDriver::clearJointError(void)
     this->transmitMessage(MESSAGE_TYPE_CMD_COMMON, data, 3);
 }
 
-void RealmanMotorDriver::loadCurrentState(void)
+void RealmanMotorDriver::loadState(void)
 {
     BytesUnion_FD empty_data;
     this->transmitMessage(MESSAGE_TYPE_CMD_JSTATE, empty_data, 0);
@@ -135,18 +136,30 @@ void RealmanMotorDriver::processCommonMessage(CAN_FRAME_FD &message)
     
     if (command_index == 0x10) // current current
     {
-        this->current_torque = bytesToInt32(&message.data.uint8[2]);
+        this->current = bytesToInt32(&message.data.uint8[2]);
         //Serial.printf("current %d\n", current_current);
     }
     else if (command_index == 0x12) // current velocity
     {
-        this->current_velocity = bytesToInt32(&message.data.uint8[2]);
+        this->velocity = bytesToInt32(&message.data.uint8[2]);
         //Serial.printf("velocity %d\n", current_velocity);
     }
-    else if (command_index == 0x14) // current position
+    else if (command_index == 0x14) // current output shaft position
     { 
-        this->current_position = bytesToInt32(&message.data.uint8[2]);
-        //Serial.printf("Current Position in common message: %d\n", this->current_position);
+        this->output_shaft_position = bytesToInt32(&message.data.uint8[2]);
+        //Serial.printf("Current Position in common message: %d\n", this->current_output_shaft_position);
+    }
+    else if (command_index == 0x16)
+    {
+        this->motor_shaft_position = bytesToInt32(&message.data.uint8[2]);
+    }
+    else if (command_index == 0x26)
+    {
+        this->output_shaft_encoder_count = bytesToInt32(&message.data.uint8[2]);
+    }
+    else if (command_index == 0x28)
+    {
+        this->motor_shaft_encoder_count = bytesToInt32(&message.data.uint8[2]);
     }
     else if (command_index == 0x49) // IAP update success
     {
@@ -197,7 +210,6 @@ void RealmanMotorDriver::processStateMessage(CAN_FRAME_FD &message)
     Serial.printf("Brake State: %d\n", brake_state);
     // float current_position = (message.data.uint8[11] << 24) | (message.data.uint8[10] << 16) | (message.data.uint8[9] << 8) | message.data.uint8[8];
     float current_position = (float) (bytesToInt32(&message.data.uint8[8])) / 10000;
-    //this->current_position = current_position;
     Serial.printf("Current Position: %f\n", current_position);
     // float current_current = (message.data.uint8[15] << 24) | (message.data.uint8[14] << 16) | (message.data.uint8[13] << 8) | message.data.uint8[12];
     float current_current = (float) (bytesToInt32(&message.data.uint8[12])) / 1000;
@@ -209,9 +221,9 @@ void RealmanMotorDriver::processServoMessage(CAN_FRAME_FD &message)
     if (message.length != 16) {
         return;
     }
-    this->current_torque = bytesToInt32(&message.data.uint8[0]);
-    this->current_velocity = bytesToInt32(&message.data.uint8[4]);
-    this->current_position = bytesToInt32(&message.data.uint8[8]);
+    this->current = bytesToInt32(&message.data.uint8[0]);
+    this->velocity = bytesToInt32(&message.data.uint8[4]);
+    this->output_shaft_position = bytesToInt32(&message.data.uint8[8]);
     this->error_state = bytesToUint16(&message.data.uint8[14]);
     //uint16_t enable_state = bytesToUint16(&message.data.uint8[12]);
     //Serial.printf("Current Current: %f\n", current_current);
@@ -222,7 +234,7 @@ void RealmanMotorDriver::processServoMessage(CAN_FRAME_FD &message)
 }
 
 
-void RealmanMotorDriver::loadCurrentCurrent(void)
+void RealmanMotorDriver::loadCurrent(void)
 {
     BytesUnion_FD data;
     data.uint8[0] = 0x01;
@@ -231,7 +243,7 @@ void RealmanMotorDriver::loadCurrentCurrent(void)
     this->transmitMessage(MESSAGE_TYPE_CMD_COMMON, data, 3);
 }
 
-void RealmanMotorDriver::loadCurrentVelocity(void)
+void RealmanMotorDriver::loadVelocity(void)
 {
     BytesUnion_FD data;
     data.uint8[0] = 0x01;
@@ -240,7 +252,7 @@ void RealmanMotorDriver::loadCurrentVelocity(void)
     this->transmitMessage(MESSAGE_TYPE_CMD_COMMON, data, 3);
 }
 
-void RealmanMotorDriver::loadCurrentPosition(void)
+void RealmanMotorDriver::loadOutputShaftPosition(void)
 {
     BytesUnion_FD data;
     data.uint8[0] = 0x01;
@@ -249,17 +261,46 @@ void RealmanMotorDriver::loadCurrentPosition(void)
     this->transmitMessage(MESSAGE_TYPE_CMD_COMMON, data, 3);
 }
 
-int32_t RealmanMotorDriver::getCurrentPosition(void)
+void RealmanMotorDriver::loadMotorShaftPosition(void)
 {
-    return this->current_position;
+    BytesUnion_FD data;
+    data.uint8[0] = 0x01;
+    data.uint8[1] = 0x16;
+    data.uint8[2] = 0x02;
+    this->transmitMessage(MESSAGE_TYPE_CMD_COMMON, data, 3);
 }
-int32_t RealmanMotorDriver::getCurrentVelocity(void)
+
+void RealmanMotorDriver::loadOutputShaftEncoderCount(void)
 {
-    return this->current_velocity;
+    BytesUnion_FD data;
+    data.uint8[0] = 0x01;
+    data.uint8[1] = 0x26;
+    data.uint8[2] = 0x02;
+    this->transmitMessage(MESSAGE_TYPE_CMD_COMMON, data, 3);
 }
-int32_t RealmanMotorDriver::getCurrentTorque(void)
+
+void RealmanMotorDriver::loadMotorShaftEncoderCount(void)
 {
-    return this->current_torque;
+    BytesUnion_FD data;
+    data.uint8[0] = 0x01;
+    data.uint8[1] = 0x28;
+    data.uint8[2] = 0x02;
+    this->transmitMessage(MESSAGE_TYPE_CMD_COMMON, data, 3);
+}
+
+int32_t RealmanMotorDriver::getOutputShaftPosition(void)
+{
+    return this->output_shaft_position;
+}
+
+int32_t RealmanMotorDriver::getVelocity(void)
+{
+    return this->velocity;
+}
+
+int32_t RealmanMotorDriver::getCurrent(void)
+{
+    return this->current;
 }
 
 uint16_t RealmanMotorDriver::getErrorState(void)
@@ -270,6 +311,48 @@ uint16_t RealmanMotorDriver::getErrorState(void)
 bool RealmanMotorDriver::getConnectionState(void)
 {
     return (this->connection_state == ONLINE);
+}
+
+int32_t RealmanMotorDriver::getMotorShaftEncoderCount(void)
+{
+    return this->motor_shaft_encoder_count;
+}
+
+int32_t RealmanMotorDriver::getOutputShaftEncoderCount(void)
+{
+    return this->output_shaft_encoder_count;
+}
+
+int16_t RealmanMotorDriver::getDifferenceBetweenMotorAndOutputShaftPosition(void)
+{
+    // モーター側のエンコーダ分解能
+    int32_t motor_shaft_encoder_resolution = 66636;
+    // 出力軸側のエンコーダ分解能
+    int32_t output_shaft_encoder_resolution = 262144;
+    // 減速比の設定（あとで修正する）
+    double reduce_ratio = 100.0;
+    switch(this->module_id)
+    {
+        case 0x01:
+            reduce_ratio = 100.0;
+            break;
+        case 0x02:
+        case 0x03:
+        case 0x04:
+        case 0x05:
+        case 0x06:
+        case 0x07:
+            reduce_ratio = 80.0;
+            break;
+        default:
+            reduce_ratio = 80.0;
+            break;
+    }
+    double ratio = round(motor_shaft_encoder_count * reduce_ratio / output_shaft_encoder_resolution);
+
+    double diff = this->motor_shaft_encoder_count / ratio - this->output_shaft_position;
+    
+    return static_cast<int16_t>(diff);
 }
 
 void RealmanMotorDriver::setTargetPosition(int32_t target_position)

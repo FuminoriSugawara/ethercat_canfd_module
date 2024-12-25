@@ -8,7 +8,9 @@
         "/opt/ros/humble/local/lib/python3.10/dist-packages"
     ],
     "files.associations": {
-        "spi_master.h": "c"
+        "spi_master.h": "c",
+        "chrono": "cpp",
+        "cmath": "cpp"
     },
     "idf.port": "/dev/ttyUSB1",
     "idf.adapterTargetName": "esp32"

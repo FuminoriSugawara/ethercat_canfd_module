@@ -106,11 +106,11 @@ std::map<uint8_t, uint32_t> canfd_receive_counts_map;
 std::map<uint8_t, bool> motor_driver_connection_states_map;
 std::map<uint8_t, int32_t> actual_positions_map;
 std::map<uint8_t, int32_t> actual_velocities_map;
-std::map<uint8_t, int32_t> actual_torques_map;
-std::map<uint8_t, uint16_t> status_words_map;
+std::map<uint8_t, int32_t> actual_currents_map;
+std::map<uint8_t, uint16_t> encoder_diffs_map;
 std::map<uint8_t, int32_t> target_positions_map;
 std::map<uint8_t, int32_t> target_velocities_map;
-std::map<uint8_t, int32_t> target_torques_map;
+std::map<uint8_t, int32_t> target_currents_map;
 std::map<uint8_t, uint16_t> control_words_map;
 
 
@@ -124,27 +124,31 @@ TaskHandle_t canfdWriteTaskHandle = NULL;
 TaskHandle_t easyCATReadTaskHandle = NULL;
 TaskHandle_t easyCATWriteTaskHandle = NULL;
 
-int32_t easycat_task_index = 0;
+uint8_t cycle_ms = 4;
+uint8_t offset_ms = cycle_ms / 2;
+
 
 
 void IRAM_ATTR EasyCAT_IntHandler()
 {
+    static uint32_t count = 0;
     // 1msごとにINTが発生する
     BaseType_t xHigherPriorityTaskWoken = pdFALSE;
-    if (easycat_task_index >= 1)
+    uint8_t local_count = count % cycle_ms;
+    if (local_count == 0)
     {
-        // 2msごとにEasyCATタスクに通知
         vTaskNotifyGiveFromISR(easyCATWriteTaskHandle, &xHigherPriorityTaskWoken);
         vTaskNotifyGiveFromISR(canfdWriteTaskHandle, &xHigherPriorityTaskWoken);
-        easycat_task_index = 0;
     }
-    else
+    else if (local_count == offset_ms)
     {
         vTaskNotifyGiveFromISR(easyCATReadTaskHandle, &xHigherPriorityTaskWoken);
         vTaskNotifyGiveFromISR(canfdReadTaskHandle, &xHigherPriorityTaskWoken);
-        easycat_task_index++;
         timeLogIndex++;
     }
+
+    count++;
+    
     if (xHigherPriorityTaskWoken)
     {
         portYIELD_FROM_ISR();
@@ -167,11 +171,11 @@ void initializeMotorDriversMap() {
         motor_driver_connection_states_map.emplace(module_id, false);
         actual_positions_map.emplace(module_id, 0);
         actual_velocities_map.emplace(module_id, 0);
-        actual_torques_map.emplace(module_id, 0);
-        status_words_map.emplace(module_id, 0);
+        actual_currents_map.emplace(module_id, 0);
+        encoder_diffs_map.emplace(module_id, 0);
         target_positions_map.emplace(module_id, 0);
         target_velocities_map.emplace(module_id, 0);
-        target_torques_map.emplace(module_id, 0);
+        target_currents_map.emplace(module_id, 0);
         control_words_map.emplace(module_id, 0);
     }
 }
@@ -179,12 +183,12 @@ void initializeMotorDriversMap() {
 
 //int32_t actual_positions[8] = {0, 0, 0, 0, 0, 0, 0, 0};
 //int32_t actual_velocities[8] = {0, 0, 0, 0, 0, 0, 0, 0};
-//int32_t actual_torques[8] = {0, 0, 0, 0, 0, 0, 0, 0};
-//uint16_t status_words[8] = {0, 0, 0, 0, 0, 0, 0, 0};
+//int32_t actual_currents[8] = {0, 0, 0, 0, 0, 0, 0, 0};
+//uint16_t encoder_diffs[8] = {0, 0, 0, 0, 0, 0, 0, 0};
 //
 //int32_t target_positions[8] = {0, 0, 0, 0, 0, 0, 0, 0};
 //int32_t target_velocities[8] = {0, 0, 0, 0, 0, 0, 0, 0};
-//int32_t target_torques[8] = {0, 0, 0, 0, 0, 0, 0, 0};
+//int32_t target_currents[8] = {0, 0, 0, 0, 0, 0, 0, 0};
 //uint16_t control_words[8] = {0, 0, 0, 0, 0, 0, 0, 0};
 
 class MyCANListener : public CANListener {
@@ -292,22 +296,22 @@ TimeLogStats calcStats() {
         timeLog[i].easyCATWriteTaskTotal = timeLog[i].easyCATWrite + timeLog[i].loadCurrentValuesFromMotorDrivers + timeLog[i].setCurrentValuesToEasyCATBuffer; 
         timeLog[i].canfdWriteTaskTotal = timeLog[i].motorControl;
 
-        if (timeLog[i].easyCATReadTaskTotal > 1000)
+        if (timeLog[i].easyCATReadTaskTotal > 1000 * offset_ms)
         {
             easyCATReadTaskOverflowCount++;
         }
 
-        if (timeLog[i].easyCATWriteTaskTotal > 1000)
+        if (timeLog[i].easyCATWriteTaskTotal > 1000 * offset_ms)
         {
             easyCATWriteTaskOverflowCount++;
         }
 
-        if (timeLog[i].canfdReadTaskTotal > 1000)
+        if (timeLog[i].canfdReadTaskTotal > 1000 * offset_ms)
         {
             canfdReadTaskOverflowCount++;
         }
 
-        if (timeLog[i].canfdWriteTaskTotal > 1000)
+        if (timeLog[i].canfdWriteTaskTotal > 1000 * offset_ms)
         {
             canfdWriteTaskOverflowCount++;
         }
@@ -566,7 +570,7 @@ bool motorDriverSetup()
         // check driver error
         for (uint8_t module_id : USED_MODULE_IDS)
         {
-            motor_drivers_map.at(module_id).loadCurrentState();
+            motor_drivers_map.at(module_id).loadState();
         }
         vTaskDelay(200 / portTICK_PERIOD_MS);
         ESP_LOGI("MotorDriver", "Checking driver error");
@@ -596,7 +600,7 @@ bool motorDriverSetup()
             // check driver error
             for (uint8_t module_id : USED_MODULE_IDS)
             {
-                motor_drivers_map.at(module_id).loadCurrentState();
+                motor_drivers_map.at(module_id).loadState();
             }
             vTaskDelay(200 / portTICK_PERIOD_MS);
             for (uint8_t module_id : USED_MODULE_IDS)
@@ -683,11 +687,11 @@ void sendControlTicMessage() {
     CAN1.WriteFrame(control_tic_message);
 }
 
-void loadCurrentPosition()
+void loadPosition()
 {
     for (uint8_t module_id : USED_MODULE_IDS)
     {
-        motor_drivers_map.at(module_id).loadCurrentPosition();
+        motor_drivers_map.at(module_id).loadOutputShaftPosition();
         canfd_send_count++;
         canfd_send_counts_map[module_id]++;
     }
@@ -715,11 +719,21 @@ void motorControl()
         }
         else if (CONTROL_MODE == RMTR_SERVO_MODE_CUR)
         {
-            motor_drivers_map.at(module_id).setTargetCurrent(target_torques_map.at(module_id));
+            motor_drivers_map.at(module_id).setTargetCurrent(target_currents_map.at(module_id));
             canfd_send_count++;
             canfd_send_counts_map[module_id]++;
-            // Serial.printf("Target torque %d: %d\n", i, target_torques[i]);
+            // Serial.printf("Target current %d: %d\n", i, target_currents[i]);
         }
+        ets_delay_us(50);
+        // 出力側のエンコーダカウントを取得
+        motor_drivers_map.at(module_id).loadOutputShaftEncoderCount();
+        canfd_send_count++;
+        canfd_send_counts_map[module_id]++;
+        ets_delay_us(50);
+        // モーター側のエンコーダカウントを取得
+        motor_drivers_map.at(module_id).loadMotorShaftEncoderCount();
+        canfd_send_count++;
+        canfd_send_counts_map[module_id]++;
         ets_delay_us(50);
     }
     
@@ -777,11 +791,11 @@ void sendEtherCATDataAsCANFD(const PROCBUFFER_OUT& ethercat_data, uint32_t canId
         data_size += vel_size;
     }
 
-    // Copy torque data if there's space
+    // Copy current data if there's space
     if (data_size < max_data_size) {
-        size_t torque_size = std::min(max_data_size - data_size, 8 * sizeof(int32_t));
-        memcpy(response.data.uint8 + data_size, &ethercat_data.Cust.Torque_1, torque_size);
-        data_size += torque_size;
+        size_t current_size = std::min(max_data_size - data_size, 8 * sizeof(int32_t));
+        memcpy(response.data.uint8 + data_size, &ethercat_data.Cust.Current_1, current_size);
+        data_size += current_size;
     }
 
     // Copy control words if there's space (assuming little-endian system)
@@ -805,6 +819,7 @@ void canfdHealthCheckTask(void *pvParameters) {
         ESP_LOGI("main", "Send count: %u, Receive count: %u", canfd_send_count, canfd_receive_count);
         for (uint8_t module_id : USED_MODULE_IDS) {
             ESP_LOGI("main", "module_id: %d, Send count: %u, Receive count: %u", module_id, canfd_send_counts_map.at(module_id), canfd_receive_counts_map.at(module_id));
+            ESP_LOGI("main", "module_id: %d, Output shaft count: %d, Motor shaft count: %d", module_id, motor_drivers_map.at(module_id).getOutputShaftEncoderCount(), motor_drivers_map.at(module_id).getMotorShaftEncoderCount());
         }
         ESP_LOGI("main", "RX Queue count: %u", rx_queue_count);
         ESP_LOGI("CANFD", "int_pin_count: %u", CAN1.int_pin_count);
@@ -879,64 +894,64 @@ void loadTargetValuesFromEtherCAT()
         uint8_t easycat_index = module_id_to_easycat_index_map.at(module_id);
         int32_t target_position = 0;
         int32_t target_velocity = 0;
-        int32_t target_torque = 0;
+        int32_t target_current = 0;
         uint16_t control_word = 0;
         switch (easycat_index)
         {
         case 0:
             target_position = EasyCAT_BufferOut.Cust.Position_1;
             target_velocity = EasyCAT_BufferOut.Cust.Velocity_1;
-            target_torque = EasyCAT_BufferOut.Cust.Torque_1;
+            target_current = EasyCAT_BufferOut.Cust.Current_1;
             control_word = EasyCAT_BufferOut.Cust.ControlWord_1;
             break;
         case 1:
             target_position = EasyCAT_BufferOut.Cust.Position_2;
             target_velocity = EasyCAT_BufferOut.Cust.Velocity_2;
-            target_torque = EasyCAT_BufferOut.Cust.Torque_2;
+            target_current = EasyCAT_BufferOut.Cust.Current_2;
             control_word = EasyCAT_BufferOut.Cust.ControlWord_2;
             break;
         case 2:
             target_position = EasyCAT_BufferOut.Cust.Position_3;
             target_velocity = EasyCAT_BufferOut.Cust.Velocity_3;
-            target_torque = EasyCAT_BufferOut.Cust.Torque_3;
+            target_current = EasyCAT_BufferOut.Cust.Current_3;
             control_word = EasyCAT_BufferOut.Cust.ControlWord_3;
             break;
 
         case 3:
             target_position = EasyCAT_BufferOut.Cust.Position_4;
             target_velocity = EasyCAT_BufferOut.Cust.Velocity_4;
-            target_torque = EasyCAT_BufferOut.Cust.Torque_4;
+            target_current = EasyCAT_BufferOut.Cust.Current_4;
             control_word = EasyCAT_BufferOut.Cust.ControlWord_4;
             break;
         case 4:
             target_position = EasyCAT_BufferOut.Cust.Position_5;
             target_velocity = EasyCAT_BufferOut.Cust.Velocity_5;
-            target_torque = EasyCAT_BufferOut.Cust.Torque_5;
+            target_current = EasyCAT_BufferOut.Cust.Current_5;
             control_word = EasyCAT_BufferOut.Cust.ControlWord_5;
             break;
         case 5:
             target_position = EasyCAT_BufferOut.Cust.Position_6;
             target_velocity = EasyCAT_BufferOut.Cust.Velocity_6;
-            target_torque = EasyCAT_BufferOut.Cust.Torque_6;
+            target_current = EasyCAT_BufferOut.Cust.Current_6;
             control_word = EasyCAT_BufferOut.Cust.ControlWord_6;
             break;
         case 6:
             target_position = EasyCAT_BufferOut.Cust.Position_7;
             target_velocity = EasyCAT_BufferOut.Cust.Velocity_7;
-            target_torque = EasyCAT_BufferOut.Cust.Torque_7;
+            target_current = EasyCAT_BufferOut.Cust.Current_7;
             control_word = EasyCAT_BufferOut.Cust.ControlWord_7;
             break;
         case 7:
             target_position = EasyCAT_BufferOut.Cust.Position_8;
             target_velocity = EasyCAT_BufferOut.Cust.Velocity_8;
-            target_torque = EasyCAT_BufferOut.Cust.Torque_8;
+            target_current = EasyCAT_BufferOut.Cust.Current_8;
             control_word = EasyCAT_BufferOut.Cust.ControlWord_8;
             break;
         }
 
         target_positions_map[module_id] = target_position;
         target_velocities_map[module_id] = target_velocity;
-        target_torques_map[module_id] = target_torque;
+        target_currents_map[module_id] = target_current;
         control_words_map[module_id] = control_word;
     }
 }
@@ -944,12 +959,10 @@ void loadTargetValuesFromEtherCAT()
 // load current values from motor drivers
 void loadCurrentValuesFromMotorDrivers() {
     for (uint8_t module_id : USED_MODULE_IDS) {
-        //actual_positions[module_id] = (int32_t)(motor_drivers_map.at(module_id).getCurrentPosition());
-        actual_positions_map[module_id] = (int32_t)(motor_drivers_map.at(module_id).getCurrentPosition());
-        //actual_torques[module_id] = (int32_t)(motor_drivers_map.at(module_id).getCurrentTorque());
-        actual_torques_map[module_id] = (int32_t)(motor_drivers_map.at(module_id).getCurrentTorque());
-        //actual_velocities[module_id] = (int32_t)(motor_drivers_map.at(module_id).getCurrentVelocity());
-        actual_velocities_map[module_id] = (int32_t)(motor_drivers_map.at(module_id).getCurrentVelocity());
+        actual_positions_map[module_id] = (int32_t)(motor_drivers_map.at(module_id).getOutputShaftPosition());
+        actual_currents_map[module_id] = (int32_t)(motor_drivers_map.at(module_id).getCurrent());
+        actual_velocities_map[module_id] = (int32_t)(motor_drivers_map.at(module_id).getVelocity());
+        encoder_diffs_map[module_id] = motor_drivers_map.at(module_id).getDifferenceBetweenMotorAndOutputShaftPosition();
     }
 }
 
@@ -961,57 +974,57 @@ void setCurrentValuesToEasyCATBuffer() {
         case 0:
             EasyCAT_BufferIn.Cust.ActualPosition_1 = actual_positions_map.at(module_id);
             EasyCAT_BufferIn.Cust.ActualVelocity_1 = actual_velocities_map.at(module_id);
-            EasyCAT_BufferIn.Cust.ActualTorque_1 = actual_torques_map.at(module_id);
-            EasyCAT_BufferIn.Cust.StatusWord_1 = status_words_map.at(module_id);
+            EasyCAT_BufferIn.Cust.ActualCurrent_1 = actual_currents_map.at(module_id);
+            EasyCAT_BufferIn.Cust.EncoderDiff_1 = encoder_diffs_map.at(module_id);
             break;
 
         case 1:
             EasyCAT_BufferIn.Cust.ActualPosition_2 = actual_positions_map.at(module_id);
             EasyCAT_BufferIn.Cust.ActualVelocity_2 = actual_velocities_map.at(module_id);
-            EasyCAT_BufferIn.Cust.ActualTorque_2 = actual_torques_map.at(module_id);
-            EasyCAT_BufferIn.Cust.StatusWord_2 = status_words_map.at(module_id);
+            EasyCAT_BufferIn.Cust.ActualCurrent_2 = actual_currents_map.at(module_id);
+            EasyCAT_BufferIn.Cust.EncoderDiff_2 = encoder_diffs_map.at(module_id);
             break;
         
         case 2:
             EasyCAT_BufferIn.Cust.ActualPosition_3 = actual_positions_map.at(module_id);
             EasyCAT_BufferIn.Cust.ActualVelocity_3 = actual_velocities_map.at(module_id);
-            EasyCAT_BufferIn.Cust.ActualTorque_3 = actual_torques_map.at(module_id);
-            EasyCAT_BufferIn.Cust.StatusWord_3 = status_words_map.at(module_id);
+            EasyCAT_BufferIn.Cust.ActualCurrent_3 = actual_currents_map.at(module_id);
+            EasyCAT_BufferIn.Cust.EncoderDiff_3 = encoder_diffs_map.at(module_id);
             break;
 
         case 3:
             EasyCAT_BufferIn.Cust.ActualPosition_4 = actual_positions_map.at(module_id);
             EasyCAT_BufferIn.Cust.ActualVelocity_4 = actual_velocities_map.at(module_id);
-            EasyCAT_BufferIn.Cust.ActualTorque_4 = actual_torques_map.at(module_id);
-            EasyCAT_BufferIn.Cust.StatusWord_4 = status_words_map.at(module_id);
+            EasyCAT_BufferIn.Cust.ActualCurrent_4 = actual_currents_map.at(module_id);
+            EasyCAT_BufferIn.Cust.EncoderDiff_4 = encoder_diffs_map.at(module_id);
             break;
         
         case 4:
             EasyCAT_BufferIn.Cust.ActualPosition_5 = actual_positions_map.at(module_id);
             EasyCAT_BufferIn.Cust.ActualVelocity_5 = actual_velocities_map.at(module_id);
-            EasyCAT_BufferIn.Cust.ActualTorque_5 = actual_torques_map.at(module_id);
-            EasyCAT_BufferIn.Cust.StatusWord_5 = status_words_map.at(module_id);
+            EasyCAT_BufferIn.Cust.ActualCurrent_5 = actual_currents_map.at(module_id);
+            EasyCAT_BufferIn.Cust.EncoderDiff_5 = encoder_diffs_map.at(module_id);
             break;
 
         case 5:
             EasyCAT_BufferIn.Cust.ActualPosition_6 = actual_positions_map.at(module_id);
             EasyCAT_BufferIn.Cust.ActualVelocity_6 = actual_velocities_map.at(module_id);
-            EasyCAT_BufferIn.Cust.ActualTorque_6 = actual_torques_map.at(module_id);
-            EasyCAT_BufferIn.Cust.StatusWord_6 = status_words_map.at(module_id);
+            EasyCAT_BufferIn.Cust.ActualCurrent_6 = actual_currents_map.at(module_id);
+            EasyCAT_BufferIn.Cust.EncoderDiff_6 = encoder_diffs_map.at(module_id);
             break;
         
         case 6:
             EasyCAT_BufferIn.Cust.ActualPosition_7 = actual_positions_map.at(module_id);
             EasyCAT_BufferIn.Cust.ActualVelocity_7 = actual_velocities_map.at(module_id);
-            EasyCAT_BufferIn.Cust.ActualTorque_7 = actual_torques_map.at(module_id);
-            EasyCAT_BufferIn.Cust.StatusWord_7 = status_words_map.at(module_id);
+            EasyCAT_BufferIn.Cust.ActualCurrent_7 = actual_currents_map.at(module_id);
+            EasyCAT_BufferIn.Cust.EncoderDiff_7 = encoder_diffs_map.at(module_id);
             break;
         
         case 7:
             EasyCAT_BufferIn.Cust.ActualPosition_8 = actual_positions_map.at(module_id);
             EasyCAT_BufferIn.Cust.ActualVelocity_8 = actual_velocities_map.at(module_id);
-            EasyCAT_BufferIn.Cust.ActualTorque_8 = actual_torques_map.at(module_id);
-            EasyCAT_BufferIn.Cust.StatusWord_8 = status_words_map.at(module_id);
+            EasyCAT_BufferIn.Cust.ActualCurrent_8 = actual_currents_map.at(module_id);
+            EasyCAT_BufferIn.Cust.EncoderDiff_8 = encoder_diffs_map.at(module_id);
             break;
         }
 

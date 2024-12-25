@@ -107,15 +107,21 @@ namespace realman_motor_driver
         void sendMultipleTargetVelocities(const std::vector<int32_t>& target_velocities);
         void sendMultipleTargetCurrents(const std::vector<int32_t>& target_currents);
         void setZeroPosition(void);
-        void loadCurrentState(void);
-        void loadCurrentCurrent(void);
-        void loadCurrentVelocity(void);
-        void loadCurrentPosition(void);
-        int32_t getCurrentPosition(void);
-        int32_t getCurrentVelocity(void);
-        int32_t getCurrentTorque(void);
+        void loadState(void);
+        void loadCurrent(void);
+        void loadVelocity(void);
+        void loadOutputShaftPosition(void);
+        void loadMotorShaftPosition(void);
+        void loadOutputShaftEncoderCount(void);
+        void loadMotorShaftEncoderCount(void);
+        int32_t getOutputShaftPosition(void);
+        int32_t getVelocity(void);
+        int32_t getCurrent(void);
         uint16_t getErrorState(void);
+        int16_t getDifferenceBetweenMotorAndOutputShaftPosition(void);
         bool getConnectionState(void);
+        int32_t getMotorShaftEncoderCount(void);
+        int32_t getOutputShaftEncoderCount(void);
 
 
     private:
@@ -125,9 +131,12 @@ namespace realman_motor_driver
         CONTROL_MODE control_mode = POSITION_CONTROL;
         uint16_t error_state = 0;
         uint8_t module_id;
-        int32_t current_position = 0;
-        int32_t current_velocity = 0;
-        int32_t current_torque = 0;
+        int32_t velocity = 0;
+        int32_t current = 0;
+        int32_t output_shaft_position = 0;
+        int32_t motor_shaft_position = 0;
+        int32_t output_shaft_encoder_count = 0;
+        int32_t motor_shaft_encoder_count = 0;
         boolean IS_DEBUG = false;
         boolean DRY_RUN = false;
         boolean SERIAL_DEBUG = false;
