@@ -726,12 +726,7 @@ void motorControl()
         }
         ets_delay_us(50);
         // 出力側のエンコーダカウントを取得
-        motor_drivers_map.at(module_id).loadOutputShaftEncoderCount();
-        canfd_send_count++;
-        canfd_send_counts_map[module_id]++;
-        ets_delay_us(50);
-        // モーター側のエンコーダカウントを取得
-        motor_drivers_map.at(module_id).loadMotorShaftEncoderCount();
+        motor_drivers_map.at(module_id).loadEncoderCount();
         canfd_send_count++;
         canfd_send_counts_map[module_id]++;
         ets_delay_us(50);

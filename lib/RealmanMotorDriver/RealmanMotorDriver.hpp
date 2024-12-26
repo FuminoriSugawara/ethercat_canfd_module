@@ -112,8 +112,7 @@ namespace realman_motor_driver
         void loadVelocity(void);
         void loadOutputShaftPosition(void);
         void loadMotorShaftPosition(void);
-        void loadOutputShaftEncoderCount(void);
-        void loadMotorShaftEncoderCount(void);
+        void loadEncoderCount(void);
         int32_t getOutputShaftPosition(void);
         int32_t getVelocity(void);
         int32_t getCurrent(void);

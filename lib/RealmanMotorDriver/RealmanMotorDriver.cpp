@@ -156,10 +156,7 @@ void RealmanMotorDriver::processCommonMessage(CAN_FRAME_FD &message)
     else if (command_index == 0x26)
     {
         this->output_shaft_encoder_count = bytesToInt32(&message.data.uint8[2]);
-    }
-    else if (command_index == 0x28)
-    {
-        this->motor_shaft_encoder_count = bytesToInt32(&message.data.uint8[2]);
+        this->motor_shaft_encoder_count = bytesToInt32(&message.data.uint8[6]);
     }
     else if (command_index == 0x49) // IAP update success
     {
@@ -270,23 +267,15 @@ void RealmanMotorDriver::loadMotorShaftPosition(void)
     this->transmitMessage(MESSAGE_TYPE_CMD_COMMON, data, 3);
 }
 
-void RealmanMotorDriver::loadOutputShaftEncoderCount(void)
+void RealmanMotorDriver::loadEncoderCount(void)
 {
     BytesUnion_FD data;
     data.uint8[0] = 0x01;
     data.uint8[1] = 0x26;
-    data.uint8[2] = 0x02;
+    data.uint8[2] = 0x05;
     this->transmitMessage(MESSAGE_TYPE_CMD_COMMON, data, 3);
 }
 
-void RealmanMotorDriver::loadMotorShaftEncoderCount(void)
-{
-    BytesUnion_FD data;
-    data.uint8[0] = 0x01;
-    data.uint8[1] = 0x28;
-    data.uint8[2] = 0x02;
-    this->transmitMessage(MESSAGE_TYPE_CMD_COMMON, data, 3);
-}
 
 int32_t RealmanMotorDriver::getOutputShaftPosition(void)
 {
@@ -348,9 +337,9 @@ int16_t RealmanMotorDriver::getDifferenceBetweenMotorAndOutputShaftPosition(void
             reduce_ratio = 80.0;
             break;
     }
-    double ratio = round(motor_shaft_encoder_count * reduce_ratio / output_shaft_encoder_resolution);
+    double ratio = round(motor_shaft_encoder_resolution * reduce_ratio / output_shaft_encoder_resolution);
 
-    double diff = this->motor_shaft_encoder_count / ratio - this->output_shaft_position;
+    double diff = this->motor_shaft_encoder_count / ratio - this->output_shaft_encoder_count;
     
     return static_cast<int16_t>(diff);
 }
