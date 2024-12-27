@@ -725,6 +725,10 @@ void motorControl()
             // Serial.printf("Target current %d: %d\n", i, target_currents[i]);
         }
         ets_delay_us(50);
+    }
+
+    for (uint8_t module_id : USED_MODULE_IDS)
+    {
         // 出力側のエンコーダカウントを取得
         motor_drivers_map.at(module_id).loadEncoderCount();
         canfd_send_count++;
