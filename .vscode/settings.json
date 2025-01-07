@@ -12,6 +12,6 @@
         "chrono": "cpp",
         "cmath": "cpp"
     },
-    "idf.port": "/dev/ttyUSB1",
+    "idf.port": "/dev/ttyUSB0",
     "idf.adapterTargetName": "esp32"
 }
