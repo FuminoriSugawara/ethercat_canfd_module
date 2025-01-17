@@ -14,6 +14,7 @@ namespace logger
         int32_t easyCATWrite;
         int32_t loadTargetValuesFromEtherCAT;
         int32_t motorControl;
+        int32_t loadEncoderCount;
         int32_t loadRxQueue;
         int32_t loadCurrentValuesFromMotorDrivers;
         int32_t setCurrentValuesToEasyCATBuffer;
@@ -47,23 +48,41 @@ namespace logger
     {
     public:
         explicit Logger(const std::array<uint8_t, N> &module_ids) : module_ids(module_ids) {
+            int i = 0;
             for (uint8_t module_id : module_ids)
             {
-                canfd_send_counts_map[module_id] = 0;
-                canfd_receive_counts_map[module_id] = 0;
+                id_to_index[module_id] = i;
+                canfd_send_counts[i] = 0;
+                canfd_receive_counts[i] = 0;
+                i++;
             }
+            canfd_send_count = 0;
+            canfd_receive_count = 0;
+            easycat_int_count = 0;
+            motor_control_count = 0;
+            load_encoder_count_count = 0;
+            rx_queue_count = 0;
+            odd_count = 0;
+            even_count = 0;
         }
         void outputCounts();
         void outputStats();
         void resetCounts();
+        void outputProcessingTime();
 
-        uint32_t canfd_send_count = 0;
-        uint32_t canfd_receive_count = 0;
-        uint32_t easycat_count = 0;
-        uint32_t motor_control_count = 0;
-        uint32_t rx_queue_count = 0;
-        std::map<uint8_t, uint32_t> canfd_send_counts_map;
-        std::map<uint8_t, uint32_t> canfd_receive_counts_map;
+        uint32_t canfd_send_count;
+        uint32_t canfd_receive_count;
+        uint32_t easycat_int_count;
+        uint32_t motor_control_count;
+        uint32_t load_encoder_count_count;
+        uint32_t rx_queue_count;
+        uint32_t odd_count;
+        uint32_t even_count;
+        std::array<uint32_t, N> canfd_send_counts;
+        std::array<uint32_t, N> canfd_receive_counts;
+        std::array<int64_t, N> motor_control_times;
+        std::array<int64_t, N> load_encoder_count_times;
+        std::array<int, 16> id_to_index;
     private:
         std::array<uint8_t, N>module_ids;
         
@@ -73,16 +92,24 @@ namespace logger
     void Logger<N>::resetCounts()
     {
         motor_control_count = 0;
+        load_encoder_count_count = 0;
         canfd_send_count = 0;
-        for (uint8_t module_id : module_ids)
-        {
-            canfd_send_counts_map[module_id] = 0;
-            canfd_receive_counts_map[module_id] = 0;
-        }
-
         canfd_receive_count = 0;
         rx_queue_count = 0;
-        easycat_count = 0;
+        easycat_int_count = 0;
+        timeLogIndex = 0;
+        odd_count = 0;
+        even_count = 0;
+        for (uint8_t module_id : module_ids)
+        {
+            int index = id_to_index[module_id];
+            canfd_send_counts[index] = 0;
+            canfd_receive_counts[index] = 0;
+            motor_control_times[index] = 0;
+            load_encoder_count_times[index] = 0;
+        }
+
+        
         
     }
 
@@ -90,35 +117,52 @@ namespace logger
     void Logger<N>::outputCounts()
     {
         ESP_LOGI("---", "----------------------------------------");
-        ESP_LOGI("main", "EasyCAT count: %u", easycat_count);
+        ESP_LOGI("main", "EasyCAT interrupt count: %u", easycat_int_count);
+        ESP_LOGI("main", "Odd count: %u, Even count: %u", odd_count, even_count);
         ESP_LOGI("main", "Motor control count: %u", motor_control_count);
+        ESP_LOGI("main", "Load encoder count count: %u", load_encoder_count_count);
         ESP_LOGI("main", "Send count: %u, Receive count: %u", canfd_send_count, canfd_receive_count);
+        ESP_LOGI("main", "RX Queue count: %u", rx_queue_count);
         for (uint8_t module_id : module_ids)
         {
-            ESP_LOGI("main", "module_id: %d, Send count: %u, Receive count: %u", module_id, canfd_send_counts_map[module_id], canfd_receive_counts_map[module_id]);
+            int index = id_to_index[module_id];
+            ESP_LOGI("main", "module_id, %u, Send count, %u, Receive count, %u", module_id, canfd_send_counts[index], canfd_receive_counts[index]);
         }
-        ESP_LOGI("main", "RX Queue count: %u", rx_queue_count);
+    }
+
+    template <std::size_t N>
+    void Logger<N>::outputProcessingTime()
+    {
+        for (uint8_t module_id : module_ids)
+        {
+            int index = id_to_index[module_id];
+            float motor_control_time = motor_control_count > 0 ? motor_control_times[index] / motor_control_count : 0;
+            float load_encoder_count_time = load_encoder_count_count > 0 ? load_encoder_count_times[index] / load_encoder_count_count : 0;
+            ESP_LOGI("motor_process_time", "module_id, %d, Motor control time(us), %d, Load encoder count time(us), %d", module_id, (int) motor_control_time, (int) load_encoder_count_time);
+        }
     }
 
     template <std::size_t N>
     void Logger<N>::outputStats()
     {
+        outputProcessingTime();
         TimeLogStats stats = logger::calcStats();
-        //ESP_LOGI("Stats", "EasyCAT read time: min %d us, max %d us, avg %d us", stats.min.easyCATRead, stats.max.easyCATRead, stats.average.easyCATRead);
-        //ESP_LOGI("Stats", "EasyCAT write time: min %d us, max %d us, avg %d us", stats.min.easyCATWrite, stats.max.easyCATWrite, stats.average.easyCATWrite);
-        //ESP_LOGI("Stats", "Load target values from EtherCAT time: min %d us, max %d us, avg %d us", stats.min.loadTargetValuesFromEtherCAT, stats.max.loadTargetValuesFromEtherCAT, stats.average.loadTargetValuesFromEtherCAT);
-        //ESP_LOGI("Stats", "Motor control time: min %d us, max %d us, avg %d us", stats.min.motorControl, stats.max.motorControl, stats.average.motorControl);
-        //ESP_LOGI("Stats", "Load current values from motor drivers time: min %d us, max %d us, avg %d us", stats.min.loadCurrentValuesFromMotorDrivers, stats.max.loadCurrentValuesFromMotorDrivers, stats.average.loadCurrentValuesFromMotorDrivers);
-        //ESP_LOGI("Stats", "Set current values to EasyCAT buffer time: min %d us, max %d us, avg %d us", stats.min.setCurrentValuesToEasyCATBuffer, stats.max.setCurrentValuesToEasyCATBuffer, stats.average.setCurrentValuesToEasyCATBuffer);
-        //ESP_LOGI("Stats", "Load RX queue time: min %d us, max %d us, avg %d us", stats.min.loadRxQueue, stats.max.loadRxQueue, stats.average.loadRxQueue);
-        ESP_LOGI("Stats", "EasyCAT read task total time: min %d us, max %d us, avg %d us", stats.min.easyCATReadTaskTotal, stats.max.easyCATReadTaskTotal, stats.average.easyCATReadTaskTotal);
-        ESP_LOGI("Stats", "EasyCAT write task total time: min %d us, max %d us, avg %d us", stats.min.easyCATWriteTaskTotal, stats.max.easyCATWriteTaskTotal, stats.average.easyCATWriteTaskTotal);
-        ESP_LOGI("Stats", "CANFD read task total time: min %d us, max %d us, avg %d us", stats.min.canfdReadTaskTotal, stats.max.canfdReadTaskTotal, stats.average.canfdReadTaskTotal);
-        ESP_LOGI("Stats", "CANFD write task total time: min %d us, max %d us, avg %d us", stats.min.canfdWriteTaskTotal, stats.max.canfdWriteTaskTotal, stats.average.canfdWriteTaskTotal);
-        //ESP_LOGI("Stats", "EasyCAT read task overflow count: %u", stats.easyCATReadTaskOverflowCount);
-        //ESP_LOGI("Stats", "EasyCAT write task overflow count: %u", stats.easyCATWriteTaskOverflowCount);
-        //ESP_LOGI("Stats", "CANFD read task overflow count: %u", stats.canfdReadTaskOverflowCount);
-        //ESP_LOGI("Stats", "CANFD write task overflow count: %u", stats.canfdWriteTaskOverflowCount);
+        //ESP_LOGI("Stats", "EasyCAT read time, min(us), %d, max(us), %d, avg(us), %d", stats.min.easyCATRead, stats.max.easyCATRead, stats.average.easyCATRead);
+        //ESP_LOGI("Stats", "EasyCAT write time, min(us), %d, max(us), %d, avg(us), %d", stats.min.easyCATWrite, stats.max.easyCATWrite, stats.average.easyCATWrite);
+        //ESP_LOGI("Stats", "Load target values from EtherCAT time, min(us), %d, max(us), %d, avg(us), %d", stats.min.loadTargetValuesFromEtherCAT, stats.max.loadTargetValuesFromEtherCAT, stats.average.loadTargetValuesFromEtherCAT);
+        ESP_LOGI("Stats", "Motor control time, min(us), %d, max(us), %d, avg(us), %d", stats.min.motorControl, stats.max.motorControl, stats.average.motorControl);
+        ESP_LOGI("Stats", "Load encoder count time, min(us), %d, max(us), %d, avg(us), %d", stats.min.loadEncoderCount, stats.max.loadEncoderCount, stats.average.loadEncoderCount);
+        //ESP_LOGI("Stats", "Load current values from motor drivers time, min(us), %d, max(us), %d, avg(us), %d", stats.min.loadCurrentValuesFromMotorDrivers, stats.max.loadCurrentValuesFromMotorDrivers, stats.average.loadCurrentValuesFromMotorDrivers);
+        //ESP_LOGI("Stats", "Set current values to EasyCAT buffer time, min(us), %d, max(us), %d, avg(us), %d", stats.min.setCurrentValuesToEasyCATBuffer, stats.max.setCurrentValuesToEasyCATBuffer, stats.average.setCurrentValuesToEasyCATBuffer);
+        ESP_LOGI("Stats", "Load RX queue time, min(us), %d, max(us), %d, avg(us), %d", stats.min.loadRxQueue, stats.max.loadRxQueue, stats.average.loadRxQueue);
+        ESP_LOGI("Stats", "EasyCAT read task total time, min(us), %d, max(us), %d, avg(us), %d", stats.min.easyCATReadTaskTotal, stats.max.easyCATReadTaskTotal, stats.average.easyCATReadTaskTotal);
+        ESP_LOGI("Stats", "EasyCAT write task total time, min(us), %d, max(us), %d, avg(us), %d", stats.min.easyCATWriteTaskTotal, stats.max.easyCATWriteTaskTotal, stats.average.easyCATWriteTaskTotal);
+        ESP_LOGI("Stats", "CANFD read task total time, min(us), %d, max(us), %d, avg(us), %d", stats.min.canfdReadTaskTotal, stats.max.canfdReadTaskTotal, stats.average.canfdReadTaskTotal);
+        ESP_LOGI("Stats", "CANFD write task total time, min(us), %d, max(us), %d, avg(us), %d", stats.min.canfdWriteTaskTotal, stats.max.canfdWriteTaskTotal, stats.average.canfdWriteTaskTotal);
+        //ESP_LOGI("Stats", "EasyCAT read task overflow count, %u", stats.easyCATReadTaskOverflowCount);
+        //ESP_LOGI("Stats", "EasyCAT write task overflow count, %u", stats.easyCATWriteTaskOverflowCount);
+        //ESP_LOGI("Stats", "CANFD read task overflow count, %u", stats.canfdReadTaskOverflowCount);
+        //ESP_LOGI("Stats", "CANFD write task overflow count, %u", stats.canfdWriteTaskOverflowCount);
 
     }
 
@@ -130,6 +174,7 @@ namespace logger
         int64_t easyCATWriteMin = INT64_MAX;
         int64_t loadTargetValuesFromEtherCATMin = INT64_MAX;
         int64_t motorControlMin = INT64_MAX;
+        int64_t loadEncoderCountMin = INT64_MAX;
         int64_t loadCurrentValuesFromMotorDriversMin = INT64_MAX;
         int64_t setCurrentValuesToEasyCATBufferMin = INT64_MAX;
         int64_t loadRxQueueMin = INT64_MAX;
@@ -142,6 +187,7 @@ namespace logger
         int64_t easyCATWriteMax = 0;
         int64_t loadTargetValuesFromEtherCATMax = 0;
         int64_t motorControlMax = 0;
+        int64_t loadEncoderCountMax = 0;
         int64_t loadCurrentValuesFromMotorDriversMax = 0;
         int64_t setCurrentValuesToEasyCATBufferMax = 0;
         int64_t loadRxQueueMax = 0;
@@ -154,6 +200,7 @@ namespace logger
         int64_t easyCATWriteSum = 0;
         int64_t loadTargetValuesFromEtherCATSum = 0;
         int64_t motorControlSum = 0;
+        int64_t loadEncoderCountSum = 0;
         int64_t loadCurrentValuesFromMotorDriversSum = 0;
         int64_t setCurrentValuesToEasyCATBufferSum = 0;
         int64_t loadRxQueueSum = 0;
@@ -179,7 +226,7 @@ namespace logger
             timeLog[i].canfdReadTaskTotal = timeLog[i].loadRxQueue;
 
             timeLog[i].easyCATWriteTaskTotal = timeLog[i].easyCATWrite + timeLog[i].loadCurrentValuesFromMotorDrivers + timeLog[i].setCurrentValuesToEasyCATBuffer;
-            timeLog[i].canfdWriteTaskTotal = timeLog[i].motorControl;
+            timeLog[i].canfdWriteTaskTotal = timeLog[i].motorControl + timeLog[i].loadEncoderCount;
 
             if (timeLog[i].easyCATReadTaskTotal > 1000)
             {
@@ -205,6 +252,7 @@ namespace logger
             easyCATWriteSum += timeLog[i].easyCATWrite;
             loadTargetValuesFromEtherCATSum += timeLog[i].loadTargetValuesFromEtherCAT;
             motorControlSum += timeLog[i].motorControl;
+            loadEncoderCountSum += timeLog[i].loadEncoderCount;
             loadCurrentValuesFromMotorDriversSum += timeLog[i].loadCurrentValuesFromMotorDrivers;
             setCurrentValuesToEasyCATBufferSum += timeLog[i].setCurrentValuesToEasyCATBuffer;
             loadRxQueueSum += timeLog[i].loadRxQueue;
@@ -236,6 +284,11 @@ namespace logger
             if (timeLog[i].motorControl > 0 && timeLog[i].motorControl < motorControlMin)
             {
                 motorControlMin = timeLog[i].motorControl;
+            }
+
+            if (timeLog[i].loadEncoderCount > 0 && timeLog[i].loadEncoderCount < loadEncoderCountMin)
+            {
+                loadEncoderCountMin = timeLog[i].loadEncoderCount;
             }
 
             if (timeLog[i].loadCurrentValuesFromMotorDrivers > 0 && timeLog[i].loadCurrentValuesFromMotorDrivers < loadCurrentValuesFromMotorDriversMin)
@@ -293,6 +346,11 @@ namespace logger
                 motorControlMax = timeLog[i].motorControl;
             }
 
+            if (timeLog[i].loadEncoderCount > loadEncoderCountMax)
+            {
+                loadEncoderCountMax = timeLog[i].loadEncoderCount;
+            }
+
             if (timeLog[i].loadCurrentValuesFromMotorDrivers > loadCurrentValuesFromMotorDriversMax)
             {
                 loadCurrentValuesFromMotorDriversMax = timeLog[i].loadCurrentValuesFromMotorDrivers;
@@ -332,6 +390,7 @@ namespace logger
         int64_t easyCATWriteAvg = easyCATWriteSum / (size);
         int64_t loadTargetValuesFromEtherCATAvg = loadTargetValuesFromEtherCATSum / size;
         int64_t motorControlAvg = motorControlSum / size;
+        int64_t loadEncoderCountAvg = loadEncoderCountSum / size;
         int64_t loadCurrentValuesFromMotorDriversAvg = loadCurrentValuesFromMotorDriversSum / size;
         int64_t setCurrentValuesToEasyCATBufferAvg = setCurrentValuesToEasyCATBufferSum / size;
         int64_t loadRxQueueAvg = loadRxQueueSum / size;
@@ -344,6 +403,7 @@ namespace logger
         stats.average.easyCATWrite = easyCATWriteAvg;
         stats.average.loadTargetValuesFromEtherCAT = loadTargetValuesFromEtherCATAvg;
         stats.average.motorControl = motorControlAvg;
+        stats.average.loadEncoderCount = loadEncoderCountAvg;
         stats.average.loadCurrentValuesFromMotorDrivers = loadCurrentValuesFromMotorDriversAvg;
         stats.average.setCurrentValuesToEasyCATBuffer = setCurrentValuesToEasyCATBufferAvg;
         stats.average.loadRxQueue = loadRxQueueAvg;
@@ -356,6 +416,7 @@ namespace logger
         stats.min.easyCATWrite = easyCATWriteMin;
         stats.min.loadTargetValuesFromEtherCAT = loadTargetValuesFromEtherCATMin;
         stats.min.motorControl = motorControlMin;
+        stats.min.loadEncoderCount = loadEncoderCountMin;
         stats.min.loadCurrentValuesFromMotorDrivers = loadCurrentValuesFromMotorDriversMin;
         stats.min.setCurrentValuesToEasyCATBuffer = setCurrentValuesToEasyCATBufferMin;
         stats.min.loadRxQueue = loadRxQueueMin;
@@ -368,6 +429,7 @@ namespace logger
         stats.max.easyCATWrite = easyCATWriteMax;
         stats.max.loadTargetValuesFromEtherCAT = loadTargetValuesFromEtherCATMax;
         stats.max.motorControl = motorControlMax;
+        stats.max.loadEncoderCount = loadEncoderCountMax;
         stats.max.loadCurrentValuesFromMotorDrivers = loadCurrentValuesFromMotorDriversMax;
         stats.max.setCurrentValuesToEasyCATBuffer = setCurrentValuesToEasyCATBufferMax;
         stats.max.loadRxQueue = loadRxQueueMax;
