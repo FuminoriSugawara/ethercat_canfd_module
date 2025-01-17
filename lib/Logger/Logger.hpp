@@ -48,41 +48,41 @@ namespace logger
     {
     public:
         explicit Logger(const std::array<uint8_t, N> &module_ids) : module_ids(module_ids) {
-            int i = 0;
+            //int i = 0;
             for (uint8_t module_id : module_ids)
             {
-                id_to_index[module_id] = i;
-                canfd_send_counts[i] = 0;
-                canfd_receive_counts[i] = 0;
-                i++;
+                //id_to_index[module_id] = i;
+                //canfd_send_counts[i] = 0;
+                //canfd_receive_counts[i] = 0;
+                //i++;
+                canfd_send_counts_map[module_id] = 0;
+                canfd_receive_counts_map[module_id] = 0;
+                motor_control_times_map[module_id] = 0;
+                load_encoder_count_times_map[module_id] = 0;
             }
-            canfd_send_count = 0;
-            canfd_receive_count = 0;
-            easycat_int_count = 0;
-            motor_control_count = 0;
-            load_encoder_count_count = 0;
-            rx_queue_count = 0;
-            odd_count = 0;
-            even_count = 0;
         }
         void outputCounts();
         void outputStats();
         void resetCounts();
         void outputProcessingTime();
 
-        uint32_t canfd_send_count;
-        uint32_t canfd_receive_count;
-        uint32_t easycat_int_count;
-        uint32_t motor_control_count;
-        uint32_t load_encoder_count_count;
-        uint32_t rx_queue_count;
-        uint32_t odd_count;
-        uint32_t even_count;
-        std::array<uint32_t, N> canfd_send_counts;
-        std::array<uint32_t, N> canfd_receive_counts;
-        std::array<int64_t, N> motor_control_times;
-        std::array<int64_t, N> load_encoder_count_times;
-        std::array<int, 16> id_to_index;
+        uint32_t canfd_send_count = 0;
+        uint32_t canfd_receive_count = 0;
+        uint32_t easycat_int_count = 0;
+        uint32_t motor_control_count = 0;
+        uint32_t load_encoder_count_count = 0;
+        uint32_t rx_queue_count = 0;
+        uint32_t odd_count = 0;
+        uint32_t even_count = 0;
+        //std::array<uint32_t, N> canfd_send_counts;
+        //std::array<uint32_t, N> canfd_receive_counts;
+        //std::array<int64_t, N> motor_control_times;
+        //std::array<int64_t, N> load_encoder_count_times;
+        //std::array<int, 16> id_to_index;
+        std::map<uint8_t, uint32_t> canfd_send_counts_map;
+        std::map<uint8_t, uint32_t> canfd_receive_counts_map;
+        std::map<uint8_t, int64_t> motor_control_times_map;
+        std::map<uint8_t, int64_t> load_encoder_count_times_map;
     private:
         std::array<uint8_t, N>module_ids;
         
@@ -102,11 +102,15 @@ namespace logger
         even_count = 0;
         for (uint8_t module_id : module_ids)
         {
-            int index = id_to_index[module_id];
-            canfd_send_counts[index] = 0;
-            canfd_receive_counts[index] = 0;
-            motor_control_times[index] = 0;
-            load_encoder_count_times[index] = 0;
+            //int index = id_to_index[module_id];
+            //canfd_send_counts[index] = 0;
+            //canfd_receive_counts[index] = 0;
+            //motor_control_times[index] = 0;
+            //load_encoder_count_times[index] = 0;
+            canfd_send_counts_map[module_id] = 0;
+            canfd_receive_counts_map[module_id] = 0;
+            motor_control_times_map[module_id] = 0;
+            load_encoder_count_times_map[module_id] = 0;
         }
 
         
@@ -125,8 +129,9 @@ namespace logger
         ESP_LOGI("main", "RX Queue count: %u", rx_queue_count);
         for (uint8_t module_id : module_ids)
         {
-            int index = id_to_index[module_id];
-            ESP_LOGI("main", "module_id, %u, Send count, %u, Receive count, %u", module_id, canfd_send_counts[index], canfd_receive_counts[index]);
+            //int index = id_to_index[module_id];
+            //ESP_LOGI("main", "module_id, %u, Send count, %u, Receive count, %u", module_id, canfd_send_counts[index], canfd_receive_counts[index]);
+            ESP_LOGI("main", "module_id, %u, Send count, %u, Receive count, %u", module_id, canfd_send_counts_map[module_id], canfd_receive_counts_map[module_id]);
         }
     }
 
@@ -135,9 +140,12 @@ namespace logger
     {
         for (uint8_t module_id : module_ids)
         {
-            int index = id_to_index[module_id];
-            float motor_control_time = motor_control_count > 0 ? motor_control_times[index] / motor_control_count : 0;
-            float load_encoder_count_time = load_encoder_count_count > 0 ? load_encoder_count_times[index] / load_encoder_count_count : 0;
+            //int index = id_to_index[module_id];
+            //float motor_control_time = motor_control_count > 0 ? motor_control_times[index] / motor_control_count : 0;
+            //float load_encoder_count_time = load_encoder_count_count > 0 ? load_encoder_count_times[index] / load_encoder_count_count : 0;
+            //ESP_LOGI("motor_process_time", "module_id, %d, Motor control time(us), %d, Load encoder count time(us), %d", module_id, (int) motor_control_time, (int) load_encoder_count_time);
+            float motor_control_time = motor_control_count > 0 ? motor_control_times_map[module_id] / motor_control_count : 0;
+            float load_encoder_count_time = load_encoder_count_count > 0 ? load_encoder_count_times_map[module_id] / load_encoder_count_count : 0;
             ESP_LOGI("motor_process_time", "module_id, %d, Motor control time(us), %d, Load encoder count time(us), %d", module_id, (int) motor_control_time, (int) load_encoder_count_time);
         }
     }
