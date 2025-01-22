@@ -47,6 +47,7 @@ boolean DEBUG_MODE = false;
 boolean DRY_RUN = false;
 // EasyCAT buffer
 PROCBUFFER_OUT _EasyCAT_BufferOut;  // output process data buffer
+boolean ethercat_operational_ = false;
 // // canfd send count;
 // volatile uint32_t canfd_send_count = 0;
 // // canfd receive count;
@@ -243,6 +244,7 @@ bool motorDriverSetup()
         uint8_t retry_count = 5;
         while (!all_drivers_connected)
         {
+            loadRxQueue();
             uint8_t connected_count = 0;
             for (uint8_t module_id : USED_MODULE_IDS)
             {
@@ -283,6 +285,7 @@ bool motorDriverSetup()
             //vTaskDelay(1000 / portTICK_PERIOD_MS);
             //Serial.printf("Retry count %d\n", retry_count);
         }
+        loadRxQueue();
 
         vTaskDelay(200 / portTICK_PERIOD_MS);
         // check driver error
@@ -290,6 +293,7 @@ bool motorDriverSetup()
         {
             motor_drivers_map.at(module_id).loadState();
         }
+        loadRxQueue();
         vTaskDelay(200 / portTICK_PERIOD_MS);
         ESP_LOGI("MotorDriver", "Checking driver error");
         bool all_drivers_error_free = true;
@@ -355,6 +359,7 @@ bool motorDriverSetup()
             //motor_drivers[i].setDriverEnabled();
             //vTaskDelay(100 / portTICK_PERIOD_MS);
         }
+        loadRxQueue();
 
         ESP_LOGI("MotorDriver", "Motor driver setup completed");
     return true;
@@ -688,10 +693,13 @@ void loadTargetValuesFromEtherCAT()
             break;
         }
 
-        target_positions_map[module_id] = target_position;
-        target_velocities_map[module_id] = target_velocity;
-        target_currents_map[module_id] = target_current;
-        control_words_map[module_id] = control_word;
+        if (ethercat_operational_)
+        {
+            target_positions_map[module_id] = target_position;
+            target_velocities_map[module_id] = target_velocity;
+            target_currents_map[module_id] = target_current;
+            control_words_map[module_id] = control_word;
+        }
     }
 }
 
@@ -775,7 +783,8 @@ void setCurrentValuesToEasyCATBuffer() {
 
 void easyCATRead()
 {
-    EasyCAT_ReadTask();
+    unsigned char ret = EasyCAT_ReadTask();
+    ethercat_operational_ = ret == ESM_OP;
 }
 
 void easyCATWrite()
@@ -800,15 +809,17 @@ void easyCATReadTask(void *pvParameters) {
 void easyCATWriteTask(void *pvParameters) {
     while (1) {
         ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
-        //timeLog[timeLogIndex].loadCurrentValuesFromMotorDrivers = measureTime(loadCurrentValuesFromMotorDrivers);
-        int64_t loadCurrentValuesFromMotorDriversTime = measureTime(loadCurrentValuesFromMotorDrivers);
-        logger::timeLog[logger::timeLogIndex].loadCurrentValuesFromMotorDrivers = static_cast<int32_t>(loadCurrentValuesFromMotorDriversTime);
-        //timeLog[timeLogIndex].setCurrentValuesToEasyCATBuffer = measureTime(setCurrentValuesToEasyCATBuffer);
-        int64_t setCurrentValuesToEasyCATBufferTime = measureTime(setCurrentValuesToEasyCATBuffer);
-        logger::timeLog[logger::timeLogIndex].setCurrentValuesToEasyCATBuffer = static_cast<int32_t>(setCurrentValuesToEasyCATBufferTime);
-        //timeLog[timeLogIndex].easyCATWrite = measureTime(easyCATWrite); 
-        int64_t easyCATWriteTime = measureTime(easyCATWrite);
-        logger::timeLog[logger::timeLogIndex].easyCATWrite = static_cast<int32_t>(easyCATWriteTime);
+        if (ethercat_operational_) {
+            // timeLog[timeLogIndex].loadCurrentValuesFromMotorDrivers = measureTime(loadCurrentValuesFromMotorDrivers);
+            int64_t loadCurrentValuesFromMotorDriversTime = measureTime(loadCurrentValuesFromMotorDrivers);
+            logger::timeLog[logger::timeLogIndex].loadCurrentValuesFromMotorDrivers = static_cast<int32_t>(loadCurrentValuesFromMotorDriversTime);
+            // timeLog[timeLogIndex].setCurrentValuesToEasyCATBuffer = measureTime(setCurrentValuesToEasyCATBuffer);
+            int64_t setCurrentValuesToEasyCATBufferTime = measureTime(setCurrentValuesToEasyCATBuffer);
+            logger::timeLog[logger::timeLogIndex].setCurrentValuesToEasyCATBuffer = static_cast<int32_t>(setCurrentValuesToEasyCATBufferTime);
+            // timeLog[timeLogIndex].easyCATWrite = measureTime(easyCATWrite);
+            int64_t easyCATWriteTime = measureTime(easyCATWrite);
+            logger::timeLog[logger::timeLogIndex].easyCATWrite = static_cast<int32_t>(easyCATWriteTime);
+        }
     }
 }
 
