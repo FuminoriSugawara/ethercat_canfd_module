@@ -64,8 +64,11 @@ boolean ethercat_operational_ = false;
 //constexpr std::array<uint8_t, 3> USED_MODULE_IDS = {0x01, 0x02, 0x03};
 //constexpr std::array<uint8_t, 2> USED_MODULE_IDS = {0x01, 0x02};
 //constexpr std::array<uint8_t, 1> USED_MODULE_IDS = {0x01};
-#define MOTOR_DRIVER_COUNT 4
-constexpr std::array<uint8_t, MOTOR_DRIVER_COUNT> USED_MODULE_IDS = {0x01, 0x02, 0x04, 0x05};
+#define MOTOR_DRIVER_COUNT 2
+//constexpr std::array<uint8_t, MOTOR_DRIVER_COUNT> USED_MODULE_IDS = {0x01, 0x02}; // left arm
+constexpr std::array<uint8_t, MOTOR_DRIVER_COUNT> USED_MODULE_IDS = {0x04, 0x05}; // right arm
+//constexpr std::array<uint8_t, MOTOR_DRIVER_COUNT> USED_MODULE_IDS = {0x02, 0x04}; // right arm
+//constexpr std::array<uint8_t, MOTOR_DRIVER_COUNT> USED_MODULE_IDS = {0x01, 0x02, 0x04, 0x05};
 logger::Logger<MOTOR_DRIVER_COUNT> Logger(USED_MODULE_IDS);
 
 const int32_t CONTROL_DELAY = 50;
@@ -426,27 +429,39 @@ void motorControl()
     Logger.motor_control_count++;
     for (uint8_t module_id : USED_MODULE_IDS)
     {
+        uint16_t control_word = control_words_map.at(module_id);
+         
+
         int64_t start = esp_timer_get_time();
-        if (CONTROL_MODE == RMTR_SERVO_MODE_POS)
+        if (control_word == 0)
         {
-            // Serial.printf("Target position %d: %d\n", i, target_positions[i]);
-            motor_drivers_map.at(module_id).setTargetPosition(target_positions_map.at(module_id));
+            motor_drivers_map.at(module_id).loadOutputShaftPosition();
             Logger.canfd_send_count++;
             Logger.canfd_send_counts_map[module_id]++;
         }
-        else if (CONTROL_MODE == RMTR_SERVO_MODE_VEL)
+        else
         {
-            // Serial.printf("Target velocity %d: %d\n", i, target_velocities[i]);
-            motor_drivers_map.at(module_id).setTargetVelocity(target_velocities_map.at(module_id));
-            Logger.canfd_send_count++;
-            Logger.canfd_send_counts_map[module_id]++;
-        }
-        else if (CONTROL_MODE == RMTR_SERVO_MODE_CUR)
-        {
-            motor_drivers_map.at(module_id).setTargetCurrent(target_currents_map.at(module_id));
-            Logger.canfd_send_count++;
-            Logger.canfd_send_counts_map[module_id]++;
-            // Serial.printf("Target current %d: %d\n", i, target_currents[i]);
+            if (CONTROL_MODE == RMTR_SERVO_MODE_POS)
+            {
+                // Serial.printf("Target position %d: %d\n", i, target_positions[i]);
+                motor_drivers_map.at(module_id).setTargetPosition(target_positions_map.at(module_id));
+                Logger.canfd_send_count++;
+                Logger.canfd_send_counts_map[module_id]++;
+            }
+            else if (CONTROL_MODE == RMTR_SERVO_MODE_VEL)
+            {
+                // Serial.printf("Target velocity %d: %d\n", i, target_velocities[i]);
+                motor_drivers_map.at(module_id).setTargetVelocity(target_velocities_map.at(module_id));
+                Logger.canfd_send_count++;
+                Logger.canfd_send_counts_map[module_id]++;
+            }
+            else if (CONTROL_MODE == RMTR_SERVO_MODE_CUR)
+            {
+                motor_drivers_map.at(module_id).setTargetCurrent(target_currents_map.at(module_id));
+                Logger.canfd_send_count++;
+                Logger.canfd_send_counts_map[module_id]++;
+                // Serial.printf("Target current %d: %d\n", i, target_currents[i]);
+            }
         }
         ets_delay_us(CONTROL_DELAY);
         int64_t end = esp_timer_get_time();
