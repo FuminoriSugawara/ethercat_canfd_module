@@ -198,20 +198,10 @@ unsigned char EasyCAT_ReadTask()                    // must be called cyclically
 
 
                                                             //--- process data transfert ----------
-                                                            //                                                        
-  if (WatchDog | !Operational)                              // if watchdog is active or we are 
-  {                                                         // not in operational state, reset 
-    for (i=0; i < TOT_BYTE_NUM_OUT ; i++)                   // the output buffer
-    {                                                       //
-      EasyCAT_BufferOut.Byte[i] = 0;                                //
-    }                                                       //
+  if (!WatchDog && Operational)
+  {
+    SPIReadProcRamFifo();
   }
-  
-  else                                                      
-  {                                                         
-    SPIReadProcRamFifo();                                   // otherwise transfer process data from 
-  }                                                         // the EtherCAT core to the output buffer  
-
                  
                                                             // the input buffer to the EtherCAT core  
 
