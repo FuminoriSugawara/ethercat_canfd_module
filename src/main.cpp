@@ -102,7 +102,7 @@ std::map<uint8_t, uint16_t> control_words_map;
 #define TIMER_SCALE           (TIMER_BASE_CLK / TIMER_DIVIDER)  // convert counter value to seconds
 #define TIMER_INTERVAL_SEC   (0.002) // 1ms interval
 
-TaskHandle_t canfdReadTaskHandle = NULL;
+//TaskHandle_t canfdReadTaskHandle = NULL;
 TaskHandle_t canfdWriteTaskHandle = NULL;
 TaskHandle_t easyCATReadTaskHandle = NULL;
 TaskHandle_t easyCATWriteTaskHandle = NULL;
@@ -128,7 +128,7 @@ void IRAM_ATTR EasyCAT_IntHandler()
     else if (local_count == offset_ms)
     {
         vTaskNotifyGiveFromISR(easyCATReadTaskHandle, &xHigherPriorityTaskWoken);
-        vTaskNotifyGiveFromISR(canfdReadTaskHandle, &xHigherPriorityTaskWoken);
+        //vTaskNotifyGiveFromISR(canfdReadTaskHandle, &xHigherPriorityTaskWoken);
         logger::timeLogIndex++;
         Logger.odd_count++;
     }
@@ -212,6 +212,23 @@ void loadRxQueue() {
             Logger.canfd_receive_counts_map[module_id]++;
         }
     }
+}
+
+void loadSingleFrame()
+{
+    CAN_FRAME_FD rxFrame;
+    rxFrame = CAN1.readSingleFrameFD();
+    if (rxFrame.id == 0) {
+        return;
+    }
+    uint8_t module_id = (rxFrame.id & 0x00FF);
+    auto it = motor_drivers_map.find(module_id);
+    if (it == motor_drivers_map.end()) {
+        return;
+    }
+    motor_drivers_map.at(module_id).processCANFDMessage(rxFrame);
+    Logger.canfd_receive_count++;
+    Logger.canfd_receive_counts_map[module_id]++;
 }
 
 MyCANListener myCanListener;
@@ -463,11 +480,13 @@ void motorControl()
                 // Serial.printf("Target current %d: %d\n", i, target_currents[i]);
             }
         }
-        ets_delay_us(CONTROL_DELAY);
+        //ets_delay_us(CONTROL_DELAY);
         int64_t end = esp_timer_get_time();
         int64_t time = end - start;
         Logger.motor_control_times_map[module_id] += time;
+        loadSingleFrame();
     }
+    loadRxQueue();
 
     
 }
@@ -480,24 +499,26 @@ void loadEncoderCount(void)
         // 出力側のエンコーダカウントを取得
         int64_t start = esp_timer_get_time();
         motor_drivers_map.at(module_id).loadEncoderCount();
-        ets_delay_us(CONTROL_DELAY);
+        //ets_delay_us(CONTROL_DELAY);
         Logger.canfd_send_count++;
         Logger.canfd_send_counts_map[module_id]++;
         int64_t end = esp_timer_get_time();
         int64_t time = end - start;
         Logger.load_encoder_count_times_map[module_id] += time;
+        loadSingleFrame();
     }
+    loadRxQueue();
 
 }
 
-void canfdReadTask(void *pvParameters) {
-    while (1)
-    {
-        ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
-        int64_t time = measureTime(loadRxQueue);
-        logger::timeLog[logger::timeLogIndex].loadRxQueue = static_cast<int32_t>(time);
-    }
-}
+//void canfdReadTask(void *pvParameters) {
+//    while (1)
+//    {
+//        ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
+//        int64_t time = measureTime(loadRxQueue);
+//        logger::timeLog[logger::timeLogIndex].loadRxQueue = static_cast<int32_t>(time);
+//    }
+//}
 
 void canfdWriteTask(void *pvParameters) {
     while (1)
@@ -573,6 +594,21 @@ void canfdHealthCheckTask(void *pvParameters) {
         Logger.outputCounts();
         Logger.outputStats();
         Logger.resetCounts();
+        // 目標位置を一行にまとめてログ出力
+        // cppの文字列変数
+        std::string target_positions_str = "";
+        std::string actual_positions_str = "";
+        std::string control_words_str = "";
+        for (uint8_t module_id : USED_MODULE_IDS) {
+            target_positions_str += std::to_string(target_positions_map.at(module_id)) + " ";
+            actual_positions_str += std::to_string(actual_positions_map.at(module_id)) + " ";
+            control_words_str += std::to_string(control_words_map.at(module_id)) + " ";
+        }
+        // ログ出力
+        ESP_LOGI("TargetPositions", "%s", target_positions_str.c_str());
+        ESP_LOGI("ActualPositions", "%s", actual_positions_str.c_str());
+        ESP_LOGI("ControlWords", "%s", control_words_str.c_str());
+                
         //ESP_LOGI("main", "EasyCAT count: %u", easycat_count);
         //ESP_LOGI("main", "Motor control count: %u", motor_control_count);
         //ESP_LOGI("main", "Send count: %u, Receive count: %u", canfd_send_count, canfd_receive_count);
@@ -931,7 +967,7 @@ extern "C" void app_main(void)
     xTaskCreatePinnedToCore(easyCATReadTask, "easyCAT-read-task", 4096, NULL, 6, &easyCATReadTaskHandle , 0);
     xTaskCreatePinnedToCore(easyCATWriteTask, "easyCAT-write-task", 4096, NULL, 6, &easyCATWriteTaskHandle , 0);
     //xTaskCreatePinnedToCore(canfd_task, "canfd-send-task", 4096, NULL, 5, &canfdTaskHandle , 0);
-    xTaskCreatePinnedToCore(canfdReadTask, "canfd-read-task", 4096, NULL, 6, &canfdReadTaskHandle, 1);
+    //xTaskCreatePinnedToCore(canfdReadTask, "canfd-read-task", 4096, NULL, 6, &canfdReadTaskHandle, 1);
     xTaskCreatePinnedToCore(canfdWriteTask, "canfd-write-task", 4096, NULL, 6, &canfdWriteTaskHandle, 1);
     xTaskCreatePinnedToCore(canfdHealthCheckTask, "canfd_health_check_task", 4096, NULL, 1, NULL, 0);
 
