@@ -65,7 +65,8 @@ boolean ethercat_operational_ = false;
 //constexpr std::array<uint8_t, 2> USED_MODULE_IDS = {0x01, 0x02};
 //constexpr std::array<uint8_t, 1> USED_MODULE_IDS = {0x01};
 #define MOTOR_DRIVER_COUNT 7
-constexpr std::array<uint8_t, MOTOR_DRIVER_COUNT> USED_MODULE_IDS = {0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07};
+//constexpr std::array<uint8_t, MOTOR_DRIVER_COUNT> USED_MODULE_IDS = {0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07};
+constexpr std::array<uint8_t, MOTOR_DRIVER_COUNT> USED_MODULE_IDS = {0x04, 0x05, 0x04, 0x05, 0x04, 0x05, 0x04};
 //constexpr std::array<uint8_t, MOTOR_DRIVER_COUNT> USED_MODULE_IDS = {0x01, 0x02}; // left arm
 //constexpr std::array<uint8_t, MOTOR_DRIVER_COUNT> USED_MODULE_IDS = {0x04, 0x05}; // right arm
 //constexpr std::array<uint8_t, MOTOR_DRIVER_COUNT> USED_MODULE_IDS = {0x02, 0x04}; // right arm
@@ -453,7 +454,7 @@ void motorControl()
         int64_t start = esp_timer_get_time();
         if (control_word == 0)
         {
-            motor_drivers_map.at(module_id).loadOutputShaftPosition();
+            motor_drivers_map.at(module_id).loadState();
             Logger.canfd_send_count++;
             Logger.canfd_send_counts_map[module_id]++;
         }
@@ -599,15 +600,18 @@ void canfdHealthCheckTask(void *pvParameters) {
         // cppの文字列変数
         std::string target_positions_str = "";
         std::string actual_positions_str = "";
+        std::string actual_currents_str = "";
         std::string control_words_str = "";
         for (uint8_t module_id : USED_MODULE_IDS) {
             target_positions_str += std::to_string(target_positions_map.at(module_id)) + " ";
             actual_positions_str += std::to_string(actual_positions_map.at(module_id)) + " ";
+            actual_currents_str += std::to_string(actual_currents_map.at(module_id)) + " ";
             control_words_str += std::to_string(control_words_map.at(module_id)) + " ";
         }
         // ログ出力
         ESP_LOGI("TargetPositions", "%s", target_positions_str.c_str());
         ESP_LOGI("ActualPositions", "%s", actual_positions_str.c_str());
+        ESP_LOGI("ActualCurrents", "%s", actual_currents_str.c_str());
         ESP_LOGI("ControlWords", "%s", control_words_str.c_str());
                 
         //ESP_LOGI("main", "EasyCAT count: %u", easycat_count);

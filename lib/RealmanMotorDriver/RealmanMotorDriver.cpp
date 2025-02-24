@@ -185,32 +185,32 @@ void RealmanMotorDriver::processCommonMessage(CAN_FRAME_FD &message)
 void RealmanMotorDriver::processStateMessage(CAN_FRAME_FD &message)
 {
     if (message.length != 16) {
-        Serial.println("Message length is not 16");
-        Serial.println(message.length);
+        //Serial.println("Message length is not 16");
+        //Serial.println(message.length);
         return;
     }
-    Serial.println("-----------------");
+    //Serial.println("-----------------");
     //uint16_t error_code = (message.data.uint8[1] << 8) | message.data.uint8[0];
     uint16_t error_code = bytesToUint16(&message.data.uint8[0]);
     this->error_state = error_code;
-    Serial.printf("Error Code: 0x%04X\n", error_code);
+    //Serial.printf("Error Code: 0x%04X\n", error_code);
     //uint16_t system_voltage = (message.data.uint8[3] << 8) | message.data.uint8[2];
     // uint16_t system_voltage = bytesToUint16(&message.data.uint8[2]);
-    float system_voltage = (float) (bytesToUint16(&message.data.uint8[2])) / 100;
-    Serial.printf("System Voltage: %f\n", system_voltage);
+    //float system_voltage = (float) (bytesToUint16(&message.data.uint8[2])) / 100;
+    //Serial.printf("System Voltage: %f\n", system_voltage);
     //uint16_t system_temperature = (message.data.uint8[5] << 8) | message.data.uint8[4];
-    float system_temperature = (float) (bytesToUint16(&message.data.uint8[4])) / 10;
-    Serial.printf("System Temperature: %f\n", system_temperature);
-    uint8_t enable_state = message.data.uint8[6];
-    Serial.printf("Enable State: %d\n", enable_state);
-    uint8_t brake_state = message.data.uint8[7];
-    Serial.printf("Brake State: %d\n", brake_state);
+    //float system_temperature = (float) (bytesToUint16(&message.data.uint8[4])) / 10;
+    //Serial.printf("System Temperature: %f\n", system_temperature);
+    //uint8_t enable_state = message.data.uint8[6];
+    //Serial.printf("Enable State: %d\n", enable_state);
+    //uint8_t brake_state = message.data.uint8[7];
+    //Serial.printf("Brake State: %d\n", brake_state);
     // float current_position = (message.data.uint8[11] << 24) | (message.data.uint8[10] << 16) | (message.data.uint8[9] << 8) | message.data.uint8[8];
-    float current_position = (float) (bytesToInt32(&message.data.uint8[8])) / 10000;
-    Serial.printf("Current Position: %f\n", current_position);
+    this->output_shaft_position = bytesToInt32(&message.data.uint8[8]);
+    //Serial.printf("Current Position: %f\n", current_position);
     // float current_current = (message.data.uint8[15] << 24) | (message.data.uint8[14] << 16) | (message.data.uint8[13] << 8) | message.data.uint8[12];
-    float current_current = (float) (bytesToInt32(&message.data.uint8[12])) / 1000;
-    Serial.printf("Current Current: %f\n", current_current);
+    this->current = bytesToInt32(&message.data.uint8[12]);
+    //Serial.printf("Current Current: %f\n", current_current);
 }
 
 void RealmanMotorDriver::processServoMessage(CAN_FRAME_FD &message)
