@@ -65,8 +65,8 @@ boolean ethercat_operational_ = false;
 //constexpr std::array<uint8_t, 2> USED_MODULE_IDS = {0x01, 0x02};
 //constexpr std::array<uint8_t, 1> USED_MODULE_IDS = {0x01};
 #define MOTOR_DRIVER_COUNT 7
-//constexpr std::array<uint8_t, MOTOR_DRIVER_COUNT> USED_MODULE_IDS = {0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07};
-constexpr std::array<uint8_t, MOTOR_DRIVER_COUNT> USED_MODULE_IDS = {0x04, 0x05, 0x04, 0x05, 0x04, 0x05, 0x04};
+constexpr std::array<uint8_t, MOTOR_DRIVER_COUNT> USED_MODULE_IDS = {0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07};
+//constexpr std::array<uint8_t, MOTOR_DRIVER_COUNT> USED_MODULE_IDS = {0x04, 0x05, 0x04, 0x05, 0x04, 0x05, 0x04};
 //constexpr std::array<uint8_t, MOTOR_DRIVER_COUNT> USED_MODULE_IDS = {0x01, 0x02}; // left arm
 //constexpr std::array<uint8_t, MOTOR_DRIVER_COUNT> USED_MODULE_IDS = {0x04, 0x05}; // right arm
 //constexpr std::array<uint8_t, MOTOR_DRIVER_COUNT> USED_MODULE_IDS = {0x02, 0x04}; // right arm

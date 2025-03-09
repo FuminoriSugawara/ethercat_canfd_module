@@ -323,9 +323,9 @@ int16_t RealmanMotorDriver::getDifferenceBetweenMotorAndOutputShaftPosition(void
     switch(this->module_id)
     {
         case 0x01:
+        case 0x02:
             reduce_ratio = 100.0;
             break;
-        case 0x02:
         case 0x03:
         case 0x04:
         case 0x05:
